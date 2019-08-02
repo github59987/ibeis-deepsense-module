@@ -17,6 +17,16 @@ except:
 _, register_ibs_method = controller_inject.make_ibs_register_decorator(__name__)
 
 
+@register_ibs_method
+def docker_image_list():
+    tag_list = []
+    for image in DOCKER_CLIENT.images.list():
+        print(image)
+        tag_list += image.tags
+    tag_list = list(set(tag_list))
+    return tag_list
+
+
 if __name__ == '__main__':
     r"""
     CommandLine:
