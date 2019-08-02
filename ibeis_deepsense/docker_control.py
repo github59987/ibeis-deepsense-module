@@ -18,7 +18,7 @@ _, register_ibs_method = controller_inject.make_ibs_register_decorator(__name__)
 
 
 @register_ibs_method
-def docker_image_list():
+def docker_image_list(ibs):
     tag_list = []
     for image in DOCKER_CLIENT.images.list():
         print(image)
