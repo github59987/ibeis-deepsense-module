@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 from ibeis.control import controller_inject
 from ibeis.constants import IMAGE_TABLE, ANNOTATION_TABLE
 from ibeis.constants import CONTAINERIZED, PRODUCTION  # NOQA
+from ibeis_deepsense import docker_control  # NOQA
 import numpy as np
 import dtool as dt
 import utool as ut
