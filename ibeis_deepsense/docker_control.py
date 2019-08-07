@@ -21,8 +21,9 @@ DOCKER_CONFIG_REGISTRY = {}
 DOCKER_IMAGE_PREFIX = 'wildme.azurecr.io'
 
 
+# Stupid question. What/why does this do? Why does this do.
 @register_ibs_method
-def docker_register_config(container_name, image_name, container_check_func=None):
+def docker_register_config(ibs, container_name, image_name, container_check_func=None):
     if container_name in DOCKER_CONFIG_REGISTRY:
         raise RuntimeError('Container name has already been added to the config registry')
     if DOCKER_IMAGE_PREFIX is not None and not image_name.startswith(DOCKER_IMAGE_PREFIX):
@@ -42,7 +43,7 @@ def docker_image_list(ibs):
     return tag_list
 
 
-# TODO next--- download the image from remote server
+# TODO download the image from remote server
 def docker_pull_image(ibs, image_name):
     pass
 
@@ -78,22 +79,63 @@ def docker_container_status(ibs, name):
 
 
 @register_ibs_method
+def docker_container_hostport(ibs, container):
+    ports = container.attrs['NetworkSettings']['Ports']
+    #TODO: understand the container.attrs['NetworkSettings']['Ports']: a dict (??) of lists (??) of dicts (only one '?')
+    for key in ports:
+        # ports is a dict keyed by e.g. '5000/tcp'. This is the only key I've seen so far on our containers.
+        for dict in ports[key]:
+            # ports[key] is a list of dicts
+            if 'HostPort' in dict:
+                # just return the first HostPort we find. Doesn't seem right... but what better logic?
+                return dict['HostPort']
+    # should we throw an assert/error here?
+    return None
+
+
+@register_ibs_method
+def docker_container_IP(ibs, container):
+    return container.attrs['NetworkSettings']['IPAddress']
+
+
+@register_ibs_method
 def docker_container_url(ibs, name):
     if ibs.docker_container_status(name) != 'running':
         return None
+    container = ibs.docker_get_container(name)
+    ip = ibs.docker_container_IP(container)
+    port = ibs.docker_container_hostport(container)
+    return(str(ip) + ':' + str(port))
+
+
+@register_ibs_method
+def docker_get_container(ibs, container_name):
+    for container in DOCKER_CLIENT.containers.list():
+        if container.name == container_name:
+            return container
+    return None
+
+
+# am interested in benchmarking these two funcs
+@register_ibs_method
+def docker_get_container_oneliner(ibs, container_name):
+    return next((cont for cont in DOCKER_CLIENT.containers.list()
+                if cont.name == container_name), None)
 
 
 @register_ibs_method
 def docker_ensure(ibs, container_name):
     config = DOCKER_CONFIG_REGISTRY.get(container_name, None)
 
-    message = 'The container name has not been registered' % (container_name, )
+    message = 'The container name \'%s\' has not been registered' % container_name
+    # would we not want to just docker_register_config in the case where config is None? I guess this comes down to what is meant by "ensure". -db
     assert config is not None, message
 
     # Check for container in running containers
     if ibs.docker_container_status(container_name) == 'running':
-        # find out the port / url of the container
-        return
+        # which of these two do we want here?
+        # return ibs.docker_container_url(container_name)
+        return ibs.docker_get_container(container_name)
 
     # If exists, return that container object
 
