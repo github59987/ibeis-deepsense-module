@@ -39,7 +39,32 @@ def ibeis_plugin_deepsense_ensure_backend(ibs):
 
 @register_ibs_method
 def ibeis_plugin_deepsense_identify(ibs, annot_uuid):
+    r"""
+    Run the Kaggle winning Right-whale deepsense.ai ID algorithm
 
+    Args:
+        ibs         (IBEISController): IBEIS controller object
+        annot_uuid  (uuid): Annotation for ID
+
+    CommandLine:
+        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_identify
+        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_identify:0
+
+    Example0:
+        >>> # ENABLE_DOCTEST
+        >>> from ibeis_deepsense._plugin import *  # NOQA
+        >>> import ibeis
+        >>> from ibeis.init import sysres
+        >>> import numpy as np
+        >>> from os.path import abspath, exists, join
+        >>> dbdir = sysres.ensure_testdb_identification_example()
+        >>> ibs = ibeis.opendb(dbdir=dbdir)
+        >>> local_path = os.path.dirname(os.path.abspath(__file__))
+        >>> image_path = abspath(join(local_path, '..', 'example-images'))
+        >>> assert exists(image_path)
+        >>> gid_list = ibs.import_folder(image_path)
+        >>> ut.embed()
+    """
     url = ibs.ibeis_plugin_deepsense_ensure_backend()
 
     annot_uuid_list = [annot_uuid]
