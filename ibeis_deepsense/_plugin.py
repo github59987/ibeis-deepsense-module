@@ -88,7 +88,7 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
         >>> print('Using container %s' % container_name)
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
-        >>> aid_list, annot_id_list = deepsense._ibeis_plugin_deepsense_init_testdb(ibs)
+        >>> aid_list, annot_id_list = ibeis_deepsense._ibeis_plugin_deepsense_init_testdb(ibs)
         >>> uuid_list = ibs.get_annot_uuids(aid_list)
         >>> rank_list = []
         >>> score_list = []
@@ -306,7 +306,7 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
         >>> from os.path import abspath, exists, join, dirname, split, splitext
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
-        >>> aid_list, annot_id_list = deepsense._ibeis_plugin_deepsense_init_testdb(ibs)
+        >>> aid_list, annot_id_list = ibeis_deepsense._ibeis_plugin_deepsense_init_testdb(ibs)
         >>> root_rowids = tuple(zip(*it.product(aid_list, aid_list)))
         >>> qaid_list, daid_list = root_rowids
         >>> config = DeepsenseConfig()
