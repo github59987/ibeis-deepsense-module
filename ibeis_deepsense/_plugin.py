@@ -1,14 +1,18 @@
 from __future__ import absolute_import, division, print_function
-from ibeis.control import controller_inject
-from ibeis_deepsense import docker_control  # NOQA
+from ibeis.control import controller_inject, docker_control
 import utool as ut
 import dtool as dt
+import numpy as np
+import vtool as vt
 from PIL import Image
 from io import BytesIO
 import base64
 import requests
 from ibeis.constants import ANNOTATION_TABLE
 from ibeis.web.apis_engine import ensure_uuid_list
+import ibeis.constants as const
+import ibeis
+
 
 (print, rrr, profile) = ut.inject2(__name__)
 
@@ -31,6 +35,18 @@ def _ibeis_plugin_deepsense_check_container(url):
 
 
 docker_control.docker_register_config(None, 'deepsense', 'wildme.azurecr.io/ibeis/deepsense:latest', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
+
+
+@register_ibs_method
+def _ibeis_plugin_deepsense_init_testdb(ibs):
+    local_path = dirname(abspath(__file__))
+    image_path = abspath(join(local_path, '..', 'example-images'))
+    assert exists(image_path)
+    gid_list = ibs.import_folder(image_path, ensure_loadable=False, ensure_exif=False)
+    uri_list = ibs.get_image_uris_original(gid_list)
+    annot_id_list = [int(splitext(split(uri)[1])[0]) for uri in uri_list]
+    aid_list = ibs.use_images_as_annotations(gid_list)
+    return aid_list, annot_id_list
 
 
 @register_ibs_method
@@ -67,25 +83,19 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True):
         >>> from os.path import abspath, exists, join, dirname, split, splitext
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
-        >>> local_path = dirname(abspath(ibeis_deepsense.__file__))
-        >>> image_path = abspath(join(local_path, '..', 'example-images'))
-        >>> assert exists(image_path)
-        >>> gid_list = ibs.import_folder(image_path, ensure_loadable=False, ensure_exif=False)
-        >>> uri_list = ibs.get_image_uris_original(gid_list)
-        >>> image_id_list = [int(splitext(split(uri)[1])[0]) for uri in uri_list]
-        >>> aid_list = ibs.use_images_as_annotations(gid_list)
+        >>> aid_list, annot_id_list = deepsense._ibeis_plugin_deepsense_init_testdb(ibs)
         >>> uuid_list = ibs.get_annot_uuids(aid_list)
         >>> rank_list = []
-        >>> for image_id, annot_uuid in zip(image_id_list, uuid_list):
+        >>> for annot_uuid, annot_id in zip(uuid_list, annot_id_list):
         >>>     resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=False)
-        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, image_id)
-        >>>     print('[instant] for whale id = %s, got rank %d with score %0.04f' % (image_id, rank, score, ))
+        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, annot_id)
+        >>>     print('[instant] for whale id = %s, got rank %d with score %0.04f' % (annot_id, rank, score, ))
         >>>     rank_list.append(rank)
         >>> response_list = ibs.depc_annot.get('DeepsenseIdentification', aid_list, 'response')
         >>> rank_list_cache = []
-        >>> for image_id, resp_json in zip(image_id_list, response_list):
-        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, image_id)
-        >>>     print('[cache] for whale id = %s, got rank %d with score %0.04f' % (image_id, rank, score, ))
+        >>> for annot_id, resp_json in zip(annot_id_list, response_list):
+        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, annot_id)
+        >>>     print('[cache] for whale id = %s, got rank %d with score %0.04f' % (annot_id, rank, score, ))
         >>>     rank_list_cache.append(rank)
         >>> assert rank_list == rank_list_cache
         >>> result = rank_list
@@ -153,6 +163,196 @@ def _ibeis_plugin_deepsense_rank(response_json, whale_id):
         if result['whale_id'] == whale_id:
             return (index, result['probability'])
     return (-1, -1)
+
+
+def get_match_results(depc, qaid_list, daid_list, score_list, config):
+    """ converts table results into format for ipython notebook """
+    #qaid_list, daid_list = request.get_parent_rowids()
+    #score_list = request.score_list
+    #config = request.config
+
+    unique_qaids, groupxs = ut.group_indices(qaid_list)
+    #grouped_qaids_list = ut.apply_grouping(qaid_list, groupxs)
+    grouped_daids = ut.apply_grouping(daid_list, groupxs)
+    grouped_scores = ut.apply_grouping(score_list, groupxs)
+
+    ibs = depc.controller
+    unique_qnids = ibs.get_annot_nids(unique_qaids)
+
+    # scores
+    _iter = zip(unique_qaids, unique_qnids, grouped_daids, grouped_scores)
+    for qaid, qnid, daids, scores in _iter:
+        dnids = ibs.get_annot_nids(daids)
+
+        # Remove distance to self
+        annot_scores = np.array(scores)
+        daid_list_ = np.array(daids)
+        dnid_list_ = np.array(dnids)
+
+        is_valid = (daid_list_ != qaid)
+        daid_list_ = daid_list_.compress(is_valid)
+        dnid_list_ = dnid_list_.compress(is_valid)
+        annot_scores = annot_scores.compress(is_valid)
+
+        # Hacked in version of creating an annot match object
+        match_result = ibeis.AnnotMatch()
+        match_result.qaid = qaid
+        match_result.qnid = qnid
+        match_result.daid_list = daid_list_
+        match_result.dnid_list = dnid_list_
+        match_result._update_daid_index()
+        match_result._update_unique_nid_index()
+
+        grouped_annot_scores = vt.apply_grouping(annot_scores, match_result.name_groupxs)
+        name_scores = np.array([np.sum(dists) for dists in grouped_annot_scores])
+        match_result.set_cannonical_name_score(annot_scores, name_scores)
+        yield match_result
+
+
+class DeepsenseRequest(dtool.base.VsOneSimilarityRequest):  # NOQA
+    _symmetric = False
+
+    @ut.accepts_scalar_input
+    def get_fmatch_overlayed_chip(request, aid_list, config=None):
+        depc = request.depc
+        ibs = depc.controller
+        chips = ibs.get_annot_chips(aid_list, config=request.config)
+        return chips
+
+    def render_single_result(request, cm, aid, **kwargs):
+        # HACK FOR WEB VIEWER
+        overlay = kwargs.get('draw_fmatches')
+        chips = request.get_fmatch_overlayed_chip([cm.qaid, aid], overlay=overlay,
+                                                  config=request.config)
+        import vtool as vt
+        out_img = vt.stack_image_list(chips)
+        return out_img
+
+    def postprocess_execute(request, parent_rowids, result_list):
+        qaid_list, daid_list = list(zip(*parent_rowids))
+        score_list = ut.take_column(result_list, 0)
+        depc = request.depc
+        config = request.config
+        cm_list = list(get_match_results(depc, qaid_list, daid_list,
+                                         score_list, config))
+        return cm_list
+
+    def execute(request, *args, **kwargs):
+        kwargs['use_cache'] = False
+        result_list = super(DeepsenseRequest, request).execute(*args, **kwargs)
+        qaids = kwargs.pop('qaids', None)
+        if qaids is not None:
+            result_list = [
+                result for result in result_list
+                if result.qaid in qaids
+            ]
+        return result_list
+
+
+class DeepsenseConfig(dtool.Config):  # NOQA
+    """
+    CommandLine:
+        python -m ibeis_deepsense._plugin_depc --test-DeepsenseConfig
+
+    Example:
+        >>> # ENABLE_DOCTEST
+        >>> from ibeis_deepsense._plugin_depc import *  # NOQA
+        >>> config = DeepsenseConfig()
+        >>> result = config.get_cfgstr()
+        >>> print(result)
+        TODO
+    """
+    def get_param_info_list(self):
+        return []
+
+
+class DeepsenseRequest(DeepsenseRequest):  # NOQA
+    _tablename = 'Deepsense'
+
+
+@register_preproc_annot(
+    tablename='Deepsense', parents=[ROOT, ROOT],
+    colnames=['score'], coltypes=[float],
+    configclass=DeepsenseConfig,
+    requestclass=DeepsenseRequest,
+    fname='deepsense',
+    rm_extern_on_delete=True,
+    chunksize=None)
+def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
+    r"""
+    CommandLine:
+        python -m ibeis_deepsense._plugin_depc --exec-ibeis_plugin_deepsense --show
+
+    Example:
+        >>> # ENABLE_DOCTEST
+        >>> import ibeis_deepsense
+        >>> import ibeis
+        >>> import utool as ut
+        >>> from ibeis.init import sysres
+        >>> import numpy as np
+        >>> from os.path import abspath, exists, join, dirname, split, splitext
+        >>> dbdir = sysres.ensure_testdb_identification_example()
+        >>> ibs = ibeis.opendb(dbdir=dbdir)
+        >>> aid_list, annot_id_list = deepsense._ibeis_plugin_deepsense_init_testdb(ibs)
+        >>> root_rowids = tuple(zip(*it.product(aid_list, aid_list)))
+        >>> qaid_list, daid_list = root_rowids
+        >>> config = DeepsenseConfig()
+        >>> # Call function via request
+        >>> request = DeepsenseRequest.new(depc, aid_list, aid_list)
+        >>> am_list1 = request.execute()
+        >>> # Call function via depcache
+        >>> prop_list = depc.get('Deepsense', root_rowids)
+        >>> # Call function normally
+        >>> score_list = list(ibeis_plugin_deepsense(depc, qaid_list, daid_list, config))
+        >>> am_list2 = list(get_match_results(depc, qaid_list, daid_list, score_list, config))
+        >>> assert score_list == prop_list, 'error in cache'
+        >>> assert np.all(am_list1[0].score_list == am_list2[0].score_list)
+        >>> ut.quit_if_noshow()
+        >>> am = am_list2[0]
+        >>> am.ishow_analysis(request)
+        >>> ut.show_if_requested()
+    """
+    ibs = depc.controller
+    ut.embed()
+
+    qaids = list(set(qaid_list))
+    daids = list(set(daid_list))
+
+    assert len(qaids) == 1
+    qaid = qaids[0]
+    annot_uuid = ibs.get_annot_uuids(qaid, use_depc=True)
+    resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=False)
+
+    dnames = ibs.get_annot_name_texts(daids)
+    name_counter_dict = {}
+    for daid, dname in zip(daids, dnames):
+        if dname in [None, const.UNKNOWN]:
+            continue
+        if dname not in name_counter_dict:
+            name_counter_dict[dname] = 0
+        name_counter_dict[dname] += 1
+
+    ids = resp_json['identification']
+    name_score_dict = {}
+    for rank, result in enumerate(ids):
+        whale_id = result['whale_id']
+        name_score = result['probability']
+
+        name_counter = name_counter_dict.get(whale_id, 0)
+        if name_counter <= 0:
+            args = (whale_id, rank, len(daids), )
+            print('Suggested match whale_id = %r (rank %d) is not in the daids (total %d)' % args)
+            continue
+        assert name_counter >= 1
+        annot_score = name_score / name_counter
+
+        assert whale_id not in name_score_dict, 'Deepsense API response had multiple scores for whale_id = %r' % (whale_id, )
+        name_counter_dict[whale_id] = annot_score
+
+    dname_list = ibs.get_annot_name_texts(daid_list)
+    for qaid, daid, dname in zip(qaid_list, daid_list, dname_list):
+        value = name_counter_dict.get(dname, -1)
+        yield value
 
 
 if __name__ == '__main__':
