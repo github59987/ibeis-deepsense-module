@@ -1,17 +1,17 @@
 from __future__ import absolute_import, division, print_function
 import ibeis
 from ibeis.control import controller_inject, docker_control
-import utool as ut
-import dtool as dt
-import numpy as np
-import vtool as vt
-from PIL import Image
-from io import BytesIO
-import base64
-import requests
 from ibeis.constants import ANNOTATION_TABLE
 from ibeis.web.apis_engine import ensure_uuid_list
 import ibeis.constants as const
+import utool as ut
+import dtool as dt
+import vtool as vt
+import numpy as np
+import base64
+import requests
+from PIL import Image
+from io import BytesIO
 
 
 (print, rrr, profile) = ut.inject2(__name__)
@@ -28,7 +28,6 @@ docker pull wildme.azurecr.io/ibeis/deepsense
 
 
 BACKEND_URL = None
-ROOT = const.ANNOTATION_TABLE
 
 
 def _ibeis_plugin_deepsense_check_container(url):
@@ -285,7 +284,7 @@ class DeepsenseRequest(DeepsenseRequest):  # NOQA
 
 
 @register_preproc_annot(
-    tablename='Deepsense', parents=[ROOT, ROOT],
+    tablename='Deepsense', parents=[ANNOTATION_TABLE, ANNOTATION_TABLE],
     colnames=['score'], coltypes=[float],
     configclass=DeepsenseConfig,
     requestclass=DeepsenseRequest,
