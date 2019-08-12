@@ -222,7 +222,7 @@ def get_match_results(depc, qaid_list, daid_list, score_list, config):
         yield match_result
 
 
-class DeepsenseRequest(dtool.base.VsOneSimilarityRequest):  # NOQA
+class DeepsenseRequest(dt.base.VsOneSimilarityRequest):  # NOQA
     _symmetric = False
 
     @ut.accepts_scalar_input
@@ -262,7 +262,7 @@ class DeepsenseRequest(dtool.base.VsOneSimilarityRequest):  # NOQA
         return result_list
 
 
-class DeepsenseConfig(dtool.Config):  # NOQA
+class DeepsenseConfig(dt.Config):  # NOQA
     """
     CommandLine:
         python -m ibeis_deepsense._plugin_depc --test-DeepsenseConfig
