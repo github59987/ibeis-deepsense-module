@@ -10,3 +10,4 @@ _doc/_build
 _page/
 
 version.py
+*.pyc
