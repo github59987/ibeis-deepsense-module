@@ -31,9 +31,12 @@ DOCKER_DEFAULT_RUN_ARGS = {
 @register_ibs_method
 # don't rely on the ibs object in this method; needs to be callable on import
 # container_check_func takes a url and returns a boolean
-def docker_register_config(ibs, container_name, image_name, container_check_func=None, run_args={}):
+def docker_register_config(ibs, container_name, image_name, container_check_func=None, run_args={}, ensure_new=False):
     if container_name in DOCKER_CONFIG_REGISTRY:
-        raise RuntimeError('Container name has already been added to the config registry')
+        if ensure_new:
+            raise RuntimeError('Container name has already been added to the config registry')
+        else:
+            print('Warning: docker_register_config called on an existing config. Already have container named %s' % (container_name, ))
     if DOCKER_IMAGE_PREFIX is not None and not image_name.startswith(DOCKER_IMAGE_PREFIX):
         raise RuntimeError('Cannot register an image name that does not have the prefix = %r' % (DOCKER_IMAGE_PREFIX, ))
     DOCKER_CONFIG_REGISTRY[container_name] = {
@@ -180,7 +183,7 @@ def docker_container_status(ibs, name):
 
 
 @register_ibs_method
-def docker_container_hostport(ibs, container):
+def docker_container_IP_port(ibs, container):
     ports = container.attrs['NetworkSettings']['Ports']
     #TODO: understand the container.attrs['NetworkSettings']['Ports']: a dict (??) of lists (??) of dicts (only one '?')
     for key in ports:
@@ -189,14 +192,9 @@ def docker_container_hostport(ibs, container):
             # ports[key] is a list of dicts
             if 'HostPort' in dict:
                 # just return the first HostPort we find. Doesn't seem right... but what better logic?
-                return dict['HostPort']
+                return (dict['HostIp'], dict['HostPort'])
     # should we throw an assert/error here?
-    return None
-
-
-@register_ibs_method
-def docker_container_IP(ibs, container):
-    return container.attrs['NetworkSettings']['IPAddress']
+    return (None, None)
 
 
 @register_ibs_method
@@ -209,8 +207,8 @@ def docker_container_url_from_name(ibs, name):
 
 @register_ibs_method
 def docker_container_url(ibs, container):
-    ip = ibs.docker_container_IP(container)
-    port = ibs.docker_container_hostport(container)
+    ip, port = ibs.docker_container_IP_port(container)
+    assert None not in [ip, port]
     return(str(ip) + ':' + str(port))
 
 
