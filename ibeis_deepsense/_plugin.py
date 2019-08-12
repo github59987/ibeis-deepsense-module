@@ -1,4 +1,5 @@
 from __future__ import absolute_import, division, print_function
+import ibeis
 from ibeis.control import controller_inject, docker_control
 import utool as ut
 import dtool as dt
@@ -11,7 +12,6 @@ import requests
 from ibeis.constants import ANNOTATION_TABLE
 from ibeis.web.apis_engine import ensure_uuid_list
 import ibeis.constants as const
-import ibeis
 
 
 (print, rrr, profile) = ut.inject2(__name__)
