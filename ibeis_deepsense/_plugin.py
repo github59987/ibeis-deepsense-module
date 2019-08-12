@@ -35,6 +35,9 @@ def _ibeis_plugin_deepsense_check_container(url):
 
 
 docker_control.docker_register_config(None, 'deepsense', 'wildme.azurecr.io/ibeis/deepsense:latest', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
+# next two lines for comparing containers side-by-side
+docker_control.docker_register_config(None, 'deepsense2', 'wildme.azurecr.io/ibeis/deepsense:app2', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
+docker_control.docker_register_config(None, 'deepsense5', 'wildme.azurecr.io/ibeis/deepsense:app5', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
 
 
 @register_ibs_method
@@ -50,17 +53,17 @@ def _ibeis_plugin_deepsense_init_testdb(ibs):
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_ensure_backend(ibs):
+def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense'):
     global BACKEND_URL
     # make sure that the container is online using docker_control functions
     if BACKEND_URL is None:
-        BACKEND_URL = ibs.docker_ensure('deepsense')
+        BACKEND_URL = ibs.docker_ensure(container_name)
     return BACKEND_URL
 
 
 @register_ibs_method
 @register_api('/api/plugin/deepsense/identify/', methods=['GET'])
-def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True):
+def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
     r"""
     Run the Kaggle winning Right-whale deepsense.ai ID algorithm
 
@@ -81,25 +84,32 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True):
         >>> from ibeis.init import sysres
         >>> import numpy as np
         >>> from os.path import abspath, exists, join, dirname, split, splitext
+        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> print('Using container %s' % container_name)
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
         >>> aid_list, annot_id_list = deepsense._ibeis_plugin_deepsense_init_testdb(ibs)
         >>> uuid_list = ibs.get_annot_uuids(aid_list)
         >>> rank_list = []
-        >>> for annot_uuid, annot_id in zip(uuid_list, annot_id_list):
-        >>>     resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=False)
-        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, annot_id)
-        >>>     print('[instant] for whale id = %s, got rank %d with score %0.04f' % (annot_id, rank, score, ))
+        >>> score_list = []
+        >>> for image_id, annot_uuid in zip(image_id_list, uuid_list):
+        >>>     resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=False, container_name=container_name)
+        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, image_id)
+        >>>     print('[instant] for whale id = %s, got rank %d with score %0.04f' % (image_id, rank, score, ))
         >>>     rank_list.append(rank)
+        >>>     score_list.append('%0.04f' % score)
         >>> response_list = ibs.depc_annot.get('DeepsenseIdentification', aid_list, 'response')
         >>> rank_list_cache = []
-        >>> for annot_id, resp_json in zip(annot_id_list, response_list):
-        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, annot_id)
-        >>>     print('[cache] for whale id = %s, got rank %d with score %0.04f' % (annot_id, rank, score, ))
+        >>> score_list_cache = []
+        >>> for image_id, resp_json in zip(image_id_list, response_list):
+        >>>     rank, score = _ibeis_plugin_deepsense_rank(resp_json, image_id)
+        >>>     print('[cache] for whale id = %s, got rank %d with score %0.04f' % (image_id, rank, score, ))
         >>>     rank_list_cache.append(rank)
+        >>>     score_list_cache.append('%0.04f' % score)
         >>> assert rank_list == rank_list_cache
-        >>> result = rank_list
-        [-1, 0, 0, 3, -1]
+        >>> assert score_list == score_list_cache
+        >>> result = (rank_list, score_list)
+        ([-1, 0, 0, 3, -1], ['-1.0000', '0.9205', '0.1283', '0.0386', '-1.0000'])
     """
     annot_uuid_list = [annot_uuid]
     ibs.web_check_uuids(qannot_uuid_list=annot_uuid_list)
@@ -112,13 +122,14 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True):
         response_list = ibs.depc_annot.get('DeepsenseIdentification', [aid], 'response')
         response = response_list[0]
     else:
-        response = ibs.ibeis_plugin_deepsense_identify_aid(aid)
+        response = ibs.ibeis_plugin_deepsense_identify_aid(aid, **kwargs)
+    # ut.embed()
     return response
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_identify_aid(ibs, aid):
-    url = ibs.ibeis_plugin_deepsense_ensure_backend()
+def ibeis_plugin_deepsense_identify_aid(ibs, aid, **kwargs):
+    url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
 
     image_path = ibs.get_annot_chip_fpath(aid)
     pil_image = Image.open(image_path)
@@ -133,7 +144,9 @@ def ibeis_plugin_deepsense_identify_aid(ibs, aid):
             'threshold': 0.0,
         }
     }
-    response = requests.post('http://%s/api/classify' % (url), json=data)
+    url = 'http://%s/api/classify' % (url)
+    print('Sending identify to %s' % url)
+    response = requests.post(url, json=data)
     assert response.status_code == 200
     return response.json()
 
