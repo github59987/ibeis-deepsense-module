@@ -28,6 +28,7 @@ docker pull wildme.azurecr.io/ibeis/deepsense
 
 
 BACKEND_URL = None
+ROOT = const.ANNOTATION_TABLE
 
 
 def _ibeis_plugin_deepsense_check_container(url):
