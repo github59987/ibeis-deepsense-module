@@ -31,6 +31,10 @@ docker pull wildme.azurecr.io/ibeis/deepsense
 BACKEND_URL = None
 
 
+INDIVIDUAL_MAP_FPATH = 'https://cthulhu.dyn.wildme.io/public/random/deepsense.flukebook.v0.csv'
+ID_MAP = None
+
+
 def _ibeis_plugin_deepsense_check_container(url):
     ut.embed()
 
@@ -55,21 +59,28 @@ def _ibeis_plugin_deepsense_init_testdb(ibs):
 
 
 @register_ibs_method
-def _ibeis_plugin_deepsense_convert_deepsense_whale_id_to_name(ibs, whale_id):
-    name = str(whale_id)
-    return name
-
-
-@register_ibs_method
 def _ibeis_plugin_deepsense_rank(ibs, response_json, desired_name):
     ids = response_json['identification']
     for index, result in enumerate(ids):
         whale_id = result['whale_id']
         probability = result['probability']
-        name = ibs._ibeis_plugin_deepsense_convert_deepsense_whale_id_to_name(whale_id)
+        name = str(whale_id)
         if name == desired_name:
             return (index, probability)
     return (-1, -1)
+
+
+# This method converts from the ibeis/Flukebook individual UUIDs to the Deepsense/
+# NEAQ IDs used by the deepsense container.
+@register_ibs_method
+def deepsense_id_to_flukebook(ibs, deepsense_id):
+    id_dict = ibs.ibeis_plugin_deepsense_ensure_id_map()
+    if deepsense_id not in id_dict:
+        # print warning bc we're missing a deepsense_id from our deepsense-flukebook map
+        print('[WARNING]: deepsense id %s is missing from the deepsense-flukebook ID map .csv' % deepsense_id)
+        return str(deepsense_id)
+    ans = id_dict[deepsense_id]
+    return ans
 
 
 @register_ibs_method
@@ -79,6 +90,39 @@ def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense'):
     if BACKEND_URL is None:
         BACKEND_URL = ibs.docker_ensure(container_name)
     return BACKEND_URL
+
+
+@register_ibs_method
+def ibeis_plugin_deepsense_ensure_id_map(ibs, container_name='deepsense'):
+    global ID_MAP
+    # make sure that the container is online using docker_control functions
+    if ID_MAP is None:
+        fpath = ut.grab_file_url(INDIVIDUAL_MAP_FPATH, appname='ibeis_deepsense', check_hash=True)
+        csv_obj = ut.CSV.from_fpath(fpath, binary=False)
+        ID_MAP = dict_from_csv(csv_obj)
+    return ID_MAP
+
+
+def dict_from_csv(csv_obj):
+    import uuid
+    id_dict = {}
+    row_list = csv_obj.row_data
+    row_list = row_list[1:]  # skip header row
+    for row in row_list:
+        deepsense_id = row[0]
+        try:
+            deepsense_id = int(deepsense_id)
+        except:
+            raise ValueError('Unable to cast provided Deepsense id %s to an int' % deepsense_id)
+        assert deepsense_id not in id_dict, 'Deepsense-to-Flukebook id map contains two entries for deepsense ID %s' % deepsense_id
+
+        flukebook_id = row[1]
+        try:
+            uuid.UUID(flukebook_id)
+        except:
+            raise ValueError('Unable to cast provided Flukebook id %s to a UUID' % flukebook_id)
+        id_dict[deepsense_id] = flukebook_id
+    return id_dict
 
 
 @register_ibs_method
@@ -92,8 +136,8 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
         annot_uuid  (uuid): Annotation for ID
 
     CommandLine:
-        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_identify
-        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_identify:0
+        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_identify_deepsense_ids
+        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_identify_deepsense_ids:0
 
     Example0:
         >>> # ENABLE_DOCTEST
@@ -128,7 +172,7 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
         >>> assert rank_list == rank_list_cache
         >>> assert score_list == score_list_cache
         >>> result = (rank_list, score_list)
-        ([-1, 0, 0, 3, -1], ['-1.0000', '0.9205', '0.1283', '0.0386', '-1.0000'])
+        ([-1, 0, 1, 0, -1], ['-1.0000', '0.9205', '0.1283', '0.0386', '-1.0000'])
     """
     annot_uuid_list = [annot_uuid]
     ibs.web_check_uuids(qannot_uuid_list=annot_uuid_list)
@@ -141,13 +185,23 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
         response_list = ibs.depc_annot.get('DeepsenseIdentification', [aid], 'response')
         response = response_list[0]
     else:
-        response = ibs.ibeis_plugin_deepsense_identify_aid(aid, **kwargs)
+        response = ibs.ibeis_plugin_deepsense_identify_deepsense_ids_aid(aid, **kwargs)
     # ut.embed()
+    response = ibs.update_response_with_flukebook_ids(response)
     return response
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_identify_aid(ibs, aid, **kwargs):
+def update_response_with_flukebook_ids(ibs, response):
+    for score_dict in response['identification']:
+        deepsense_id = score_dict['whale_id']
+        flukebook_id = ibs.deepsense_id_to_flukebook(deepsense_id)
+        score_dict['flukebook_id'] = flukebook_id
+    return response
+
+
+@register_ibs_method
+def ibeis_plugin_deepsense_identify_deepsense_ids_aid(ibs, aid, **kwargs):
     url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
 
     image_path = ibs.get_annot_chip_fpath(aid)
@@ -181,11 +235,11 @@ class DeepsenseIdentificationConfig(dt.Config):  # NOQA
     configclass=DeepsenseIdentificationConfig,
     fname='deepsense',
     chunksize=4)
-def ibeis_plugin_deepsense_identify_depc(depc, aid_list, config):
-    # The doctest for ibeis_plugin_deepsense_identify also covers this func
+def ibeis_plugin_deepsense_identify_deepsense_ids_depc(depc, aid_list, config):
+    # The doctest for ibeis_plugin_deepsense_identify_deepsense_ids also covers this func
     ibs = depc.controller
     for aid in aid_list:
-        response = ibs.ibeis_plugin_deepsense_identify_aid(aid)
+        response = ibs.ibeis_plugin_deepsense_identify_deepsense_ids_aid(aid)
         yield (response, )
 
 
@@ -233,8 +287,26 @@ def get_match_results(depc, qaid_list, daid_list, score_list, config):
         yield match_result
 
 
+class DeepsenseConfig(dt.Config):  # NOQA
+    """
+    CommandLine:
+        python -m ibeis_deepsense._plugin --test-DeepsenseConfig
+
+    Example:
+        >>> # ENABLE_DOCTEST
+        >>> from ibeis_deepsense._plugin import *  # NOQA
+        >>> config = DeepsenseConfig()
+        >>> result = config.get_cfgstr()
+        >>> print(result)
+        Deepsense()
+    """
+    def get_param_info_list(self):
+        return []
+
+
 class DeepsenseRequest(dt.base.VsOneSimilarityRequest):  # NOQA
     _symmetric = False
+    _tablename = 'Deepsense'
 
     @ut.accepts_scalar_input
     def get_fmatch_overlayed_chip(request, aid_list, config=None):
@@ -271,27 +343,6 @@ class DeepsenseRequest(dt.base.VsOneSimilarityRequest):  # NOQA
                 if result.qaid in qaids
             ]
         return result_list
-
-
-class DeepsenseConfig(dt.Config):  # NOQA
-    """
-    CommandLine:
-        python -m ibeis_deepsense._plugin --test-DeepsenseConfig
-
-    Example:
-        >>> # ENABLE_DOCTEST
-        >>> from ibeis_deepsense._plugin import *  # NOQA
-        >>> config = DeepsenseConfig()
-        >>> result = config.get_cfgstr()
-        >>> print(result)
-        Deepsense()
-    """
-    def get_param_info_list(self):
-        return []
-
-
-class DeepsenseRequest(dt.base.VsOneSimilarityRequest):  # NOQA
-    _tablename = 'Deepsense'
 
 
 @register_preproc_annot(
@@ -342,6 +393,7 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
     qaid = qaids[0]
     annot_uuid = ibs.get_annot_uuids(qaid)
     resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=True)
+    # update response_json to use flukebook names instead of deepsense
 
     dnames = ibs.get_annot_name_texts(daids)
     name_counter_dict = {}
@@ -355,10 +407,8 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
     ids = resp_json['identification']
     name_score_dict = {}
     for rank, result in enumerate(ids):
-        whale_id = result['whale_id']
-        name = ibs._ibeis_plugin_deepsense_convert_deepsense_whale_id_to_name(whale_id)
+        name = result['flukebook_id']
         name_score = result['probability']
-
         name_counter = name_counter_dict.get(name, 0)
         if name_counter <= 0:
             if name_score > 0.01:
@@ -373,8 +423,13 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
 
     dname_list = ibs.get_annot_name_texts(daid_list)
     for qaid, daid, dname in zip(qaid_list, daid_list, dname_list):
-        value = name_score_dict.get(dname, -1)
+        value = name_score_dict.get(dname, 0)
         yield (value, )
+
+
+@register_ibs_method
+def deepsense_embed(ibs):
+    ut.embed()
 
 
 if __name__ == '__main__':
