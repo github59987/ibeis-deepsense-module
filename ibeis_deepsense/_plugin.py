@@ -11,7 +11,7 @@ import vtool as vt
 import numpy as np
 import base64
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw
 from io import BytesIO
 
 
@@ -174,12 +174,7 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
         >>> result = (rank_list, score_list)
         ([-1, 0, 1, 0, -1], ['-1.0000', '0.9205', '0.1283', '0.0386', '-1.0000'])
     """
-    annot_uuid_list = [annot_uuid]
-    ibs.web_check_uuids(qannot_uuid_list=annot_uuid_list)
-    annot_uuid_list = ensure_uuid_list(annot_uuid_list)
-    # Ensure annotations
-    aid_list = ibs.get_annot_aids_from_uuid(annot_uuid_list)
-    aid = aid_list[0]
+    aid = ibs.aid_from_annot_uuid(annot_uuid)
 
     if use_depc:
         response_list = ibs.depc_annot.get('DeepsenseIdentification', [aid], 'response')
@@ -211,7 +206,7 @@ def ibeis_plugin_deepsense_identify_aid(ibs, aid, **kwargs):
 
 @register_ibs_method
 def get_b64_image(ibs, aid):
-    image_path = ibs.get_annot_chip_fpath(aid)
+    image_path = deepsense_annot_chip_fpath(ibs, aid)
     pil_image = Image.open(image_path)
     byte_buffer = BytesIO()
     pil_image.save(byte_buffer, format="JPEG")
@@ -257,7 +252,6 @@ def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, **kwargs):
     return response.json()
 
 
-# TODO finish tests
 @register_ibs_method
 @register_api('/api/plugin/deepsense/align/', methods=['GET'])
 def ibeis_plugin_deepsense_align(ibs, annot_uuid, use_depc=True, **kwargs):
@@ -304,11 +298,9 @@ def ibeis_plugin_deepsense_align(ibs, annot_uuid, use_depc=True, **kwargs):
     return response
 
 
-# TODO finish tests
-# TODO: depc version
 @register_ibs_method
 @register_api('/api/plugin/deepsense/keypoint/', methods=['GET'])
-def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=False, **kwargs):
+def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=True, **kwargs):
     r"""
     Run the Kaggle winning Right-whale deepsense.ai ID algorithm
 
@@ -355,6 +347,54 @@ def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=False, **kwargs):
     # ut.embed()
     # response = ibs.update_response_with_flukebook_ids(response)
     return response
+
+
+def deepsense_annot_chip_fpath(ibs, aid):
+    config = {
+        'dim_size': 2000,
+        'resize_dim': 'area',
+        'ext': 'jpg',
+    }
+    #fpath = ibs.get_annot_chip_fpath(aid, ensure=True, config2_=config)
+    fpath = ibs.get_annot_chip_fpath(aid)
+    return fpath
+
+
+@register_ibs_method
+@register_api('/api/plugin/deepsense/illustration/', methods=['GET'])
+def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, **kwargs):
+    alignment = ibs.ibeis_plugin_deepsense_align(annot_uuid)
+    keypoints = ibs.ibeis_plugin_deepsense_keypoint(annot_uuid)
+    aid = ibs.aid_from_annot_uuid(annot_uuid)
+    image_path = deepsense_annot_chip_fpath(ibs, aid)
+    # TODO write this func
+    #image_path = ibs.get_deepsense_chip_fpath(aid)
+    pil_img = Image.open(image_path)
+    # draw a red box based on alignment on pil_image
+    draw = ImageDraw.Draw(pil_img)
+    # draw.rectangle(((0, 00), (100, 100)), fill="black")
+    draw.rectangle(
+        (
+            (alignment['localization']['bbox1']['x'], alignment['localization']['bbox1']['y']),
+            (alignment['localization']['bbox2']['x'], alignment['localization']['bbox2']['y']),
+        ), outline='red'
+    )
+
+    blowhead = (keypoints['keypoints']['blowhead']['x'], keypoints['keypoints']['blowhead']['y'])
+    blowhead_btm, blowhead_top = bounding_box_at_centerpoint(blowhead)
+    draw.ellipse( (blowhead_btm, blowhead_top), outline="green")
+
+    bonnet = (keypoints['keypoints']['bonnet']['x'], keypoints['keypoints']['bonnet']['y'])
+    bonnet_btm, bonnet_top = bounding_box_at_centerpoint(bonnet)
+    draw.ellipse( (bonnet_btm, bonnet_top), outline="blue")
+
+    pil_img.save('/home/wildme/tmp/illustration%s.png' % annot_uuid)
+
+
+def bounding_box_at_centerpoint(point, radius=5):
+    point_less = tuple(coord - radius for coord in point)
+    point_more = tuple(coord + radius for coord in point)
+    return (point_less, point_more)
 
 
 @register_ibs_method
