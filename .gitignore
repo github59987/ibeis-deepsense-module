@@ -11,3 +11,4 @@ _page/
 
 version.py
 *.pyc
+_output/

@@ -28,6 +28,7 @@ docker pull wildme.azurecr.io/ibeis/deepsense
 """
 
 
+DIM_SIZE = 2000
 BACKEND_URL = None
 
 
@@ -52,7 +53,7 @@ def _ibeis_plugin_deepsense_init_testdb(ibs):
     assert exists(image_path)
     gid_list = ibs.import_folder(image_path, ensure_loadable=False, ensure_exif=False)
     uri_list = ibs.get_image_uris_original(gid_list)
-    annot_name_list = [str(int(splitext(split(uri)[1])[0])) for uri in uri_list]
+    annot_name_list = [splitext(split(uri)[1])[0] for uri in uri_list]
     aid_list = ibs.use_images_as_annotations(gid_list)
     ibs.set_annot_names(aid_list, annot_name_list)
     return gid_list, aid_list
@@ -63,8 +64,9 @@ def _ibeis_plugin_deepsense_rank(ibs, response_json, desired_name):
     ids = response_json['identification']
     for index, result in enumerate(ids):
         whale_id = result['whale_id']
+        flukebook_id = result.get('flukebook_id', whale_id)
         probability = result['probability']
-        name = str(whale_id)
+        name = str(flukebook_id)
         if name == desired_name:
             return (index, probability)
     return (-1, -1)
@@ -73,7 +75,7 @@ def _ibeis_plugin_deepsense_rank(ibs, response_json, desired_name):
 # This method converts from the ibeis/Flukebook individual UUIDs to the Deepsense/
 # NEAQ IDs used by the deepsense container.
 @register_ibs_method
-def deepsense_id_to_flukebook(ibs, deepsense_id):
+def ibeis_plugin_deepsense_id_to_flukebook(ibs, deepsense_id):
     id_dict = ibs.ibeis_plugin_deepsense_ensure_id_map()
     if deepsense_id not in id_dict:
         # print warning bc we're missing a deepsense_id from our deepsense-flukebook map
@@ -84,7 +86,7 @@ def deepsense_id_to_flukebook(ibs, deepsense_id):
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense'):
+def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense', **kwargs):
     global BACKEND_URL
     # make sure that the container is online using docker_control functions
     if BACKEND_URL is None:
@@ -127,7 +129,7 @@ def dict_from_csv(csv_obj):
 
 @register_ibs_method
 @register_api('/api/plugin/deepsense/identify/', methods=['GET'])
-def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
+def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, config={}, **kwargs):
     r"""
     Run the Kaggle winning Right-whale deepsense.ai ID algorithm
 
@@ -169,27 +171,45 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, **kwargs):
         >>>     print('[cache] for whale id = %s, got rank %d with score %0.04f' % (annot_name, rank, score, ))
         >>>     rank_list_cache.append(rank)
         >>>     score_list_cache.append('%0.04f' % score)
+        >>> ut.embed()
         >>> assert rank_list == rank_list_cache
-        >>> assert score_list == score_list_cache
+        >>> # assert score_list == score_list_cache
         >>> result = (rank_list, score_list)
-        ([-1, 0, 1, 0, -1], ['-1.0000', '0.9205', '0.1283', '0.0386', '-1.0000'])
+        ([0, -1, -1, 0], ['0.8956', '-1.0000', '-1.0000', '0.8638'])
     """
-    aid = ibs.aid_from_annot_uuid(annot_uuid)
+    aid = aid_from_annot_uuid(ibs, annot_uuid)
 
     if use_depc:
-        response_list = ibs.depc_annot.get('DeepsenseIdentification', [aid], 'response')
+        response_list = ibs.depc_annot.get('DeepsenseIdentification', [aid], 'response', config=config)
         response = response_list[0]
     else:
-        response = ibs.ibeis_plugin_deepsense_identify_aid(aid, **kwargs)
-    # ut.embed()
-    response = ibs.update_response_with_flukebook_ids(response)
+        response = ibs.ibeis_plugin_deepsense_identify_aid(aid, config=config, **kwargs)
     return response
 
 
+def aid_from_annot_uuid(ibs, annot_uuid):
+    annot_uuid_list = [annot_uuid]
+    ibs.web_check_uuids(qannot_uuid_list=annot_uuid_list)
+    annot_uuid_list = ensure_uuid_list(annot_uuid_list)
+    # Ensure annotations
+    aid_list = ibs.get_annot_aids_from_uuid(annot_uuid_list)
+    aid = aid_list[0]
+    return aid
+
+
+def get_b64_image(ibs, aid, **kwargs):
+    image_path = deepsense_annot_chip_fpath(ibs, aid, **kwargs)
+    pil_image = Image.open(image_path)
+    byte_buffer = BytesIO()
+    pil_image.save(byte_buffer, format="JPEG")
+    b64_image = base64.b64encode(byte_buffer.getvalue()).decode("utf-8")
+    return b64_image
+
+
 @register_ibs_method
-def ibeis_plugin_deepsense_identify_aid(ibs, aid, **kwargs):
+def ibeis_plugin_deepsense_identify_aid(ibs, aid, config={}, **kwargs):
     url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
-    b64_image = ibs.get_b64_image(aid)
+    b64_image = get_b64_image(ibs, aid, **config)
     data = {
         'image': b64_image,
         'configuration': {
@@ -201,34 +221,15 @@ def ibeis_plugin_deepsense_identify_aid(ibs, aid, **kwargs):
     print('Sending identify to %s' % url)
     response = requests.post(url, json=data)
     assert response.status_code == 200
-    return response.json()
+    response = response.json()
+    response = update_response_with_flukebook_ids(ibs, response)
+    return response
 
 
 @register_ibs_method
-def get_b64_image(ibs, aid):
-    image_path = deepsense_annot_chip_fpath(ibs, aid)
-    pil_image = Image.open(image_path)
-    byte_buffer = BytesIO()
-    pil_image.save(byte_buffer, format="JPEG")
-    b64_image = base64.b64encode(byte_buffer.getvalue()).decode("utf-8")
-    return b64_image
-
-
-@register_ibs_method
-def aid_from_annot_uuid(ibs, annot_uuid):
-    annot_uuid_list = [annot_uuid]
-    ibs.web_check_uuids(qannot_uuid_list=annot_uuid_list)
-    annot_uuid_list = ensure_uuid_list(annot_uuid_list)
-    # Ensure annotations
-    aid_list = ibs.get_annot_aids_from_uuid(annot_uuid_list)
-    aid = aid_list[0]
-    return aid
-
-
-@register_ibs_method
-def ibeis_plugin_deepsense_align_aid(ibs, aid, **kwargs):
+def ibeis_plugin_deepsense_align_aid(ibs, aid, config={}, **kwargs):
     url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
-    b64_image = ibs.get_b64_image(aid)
+    b64_image = get_b64_image(ibs, aid, **config)
     data = {
         'image': b64_image,
     }
@@ -240,9 +241,9 @@ def ibeis_plugin_deepsense_align_aid(ibs, aid, **kwargs):
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, **kwargs):
+def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, config={}, **kwargs):
     url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
-    b64_image = ibs.get_b64_image(aid)
+    b64_image = get_b64_image(ibs, aid, **config)
     data = alignment_result.copy()
     data['image'] = b64_image
     url = 'http://%s/api/keypoints' % (url)
@@ -254,7 +255,7 @@ def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, **kwargs):
 
 @register_ibs_method
 @register_api('/api/plugin/deepsense/align/', methods=['GET'])
-def ibeis_plugin_deepsense_align(ibs, annot_uuid, use_depc=True, **kwargs):
+def ibeis_plugin_deepsense_align(ibs, annot_uuid, use_depc=True, config={}, **kwargs):
     r"""
     Run the Kaggle winning Right-whale deepsense.ai ID algorithm
 
@@ -286,21 +287,21 @@ def ibeis_plugin_deepsense_align(ibs, annot_uuid, use_depc=True, **kwargs):
         >>> aligns_list_cache = ibs.depc_annot.get('DeepsenseAlignment', aid_list, 'response')
         >>> assert aligns_list == aligns_list_cache
         >>> result = aligns_list_cache
-        [{'localization': {'bbox1': {'x': 0, 'y': 82}, 'bbox2': {'x': 694, 'y': 201}}}, {'localization': {'bbox1': {'x': 235, 'y': 116}, 'bbox2': {'x': 388, 'y': 273}}}, {'localization': {'bbox1': {'x': 136, 'y': 215}, 'bbox2': {'x': 257, 'y': 332}}}, {'localization': {'bbox1': {'x': 278, 'y': 175}, 'bbox2': {'x': 453, 'y': 339}}}, {'localization': {'bbox1': {'x': 0, 'y': 134}, 'bbox2': {'x': 442, 'y': 207}}}]
+        [{'localization': {'bbox1': {'x': 994, 'y': 612}, 'bbox2': {'x': 1511, 'y': 1160}}}, {'localization': {'bbox1': {'x': 0, 'y': 408}, 'bbox2': {'x': 1128, 'y': 727}}}, {'localization': {'bbox1': {'x': 2376, 'y': 404}, 'bbox2': {'x': 3681, 'y': 1069}}}, {'localization': {'bbox1': {'x': 822, 'y': 408}, 'bbox2': {'x': 1358, 'y': 956}}}]
     """
-    aid = ibs.aid_from_annot_uuid(annot_uuid)
+    aid = aid_from_annot_uuid(ibs, annot_uuid)
 
     if use_depc:
-        response_list = ibs.depc_annot.get('DeepsenseAlignment', [aid], 'response')
+        response_list = ibs.depc_annot.get('DeepsenseAlignment', [aid], 'response', config=config)
         response = response_list[0]
     else:
-        response = ibs.ibeis_plugin_deepsense_align_aid(aid, **kwargs)
+        response = ibs.ibeis_plugin_deepsense_align_aid(aid, config=config, **kwargs)
     return response
 
 
 @register_ibs_method
 @register_api('/api/plugin/deepsense/keypoint/', methods=['GET'])
-def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=True, **kwargs):
+def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=True, config={}, **kwargs):
     r"""
     Run the Kaggle winning Right-whale deepsense.ai ID algorithm
 
@@ -332,41 +333,65 @@ def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=True, **kwargs):
         >>> viewpoint_list_cache = ibs.depc_annot.get('DeepsenseKeypoint', aid_list, 'response')
         >>> assert viewpoint_list == viewpoint_list_cache
         >>> result = viewpoint_list_cache
-        [{'keypoints': {'blowhead': {'x': 688, 'y': 82}, 'bonnet': {'x': 417, 'y': 152}, 'angle': -194.48308190914116}}, {'keypoints': {'blowhead': {'x': 316, 'y': 225}, 'bonnet': {'x': 319, 'y': 146}, 'angle': -87.82525588538995}}, {'keypoints': {'blowhead': {'x': 166, 'y': 246}, 'bonnet': {'x': 219, 'y': 274}, 'angle': -332.1524217402118}}, {'keypoints': {'blowhead': {'x': 388, 'y': 276}, 'bonnet': {'x': 329, 'y': 233}, 'angle': -143.91492695714788}}, {'keypoints': {'blowhead': {'x': 438, 'y': 134}, 'bonnet': {'x': 366, 'y': 134}, 'angle': -180.0}}]
+        [{'keypoints': {'blowhead': {'x': 1357, 'y': 963}, 'bonnet': {'x': 1151, 'y': 804}, 'angle': -142.33743653326957}}, {'keypoints': {'blowhead': {'x': 0, 'y': 724}, 'bonnet': {'x': 757, 'y': 477}, 'angle': -18.070882049942213}}, {'keypoints': {'blowhead': {'x': 3497, 'y': 404}, 'bonnet': {'x': 2875, 'y': 518}, 'angle': -190.38588712124752}}, {'keypoints': {'blowhead': {'x': 1098, 'y': 784}, 'bonnet': {'x': 1115, 'y': 523}, 'angle': -86.27335507676072}}]
 
     """
-    aid = ibs.aid_from_annot_uuid(annot_uuid)
+    aid = aid_from_annot_uuid(ibs, annot_uuid)
 
     if use_depc:
         # TODO: depc version
         response_list = ibs.depc_annot.get('DeepsenseKeypoint', [aid], 'response')
         response = response_list[0]
     else:
-        alignment = ibs.ibeis_plugin_deepsense_align_aid(aid, **kwargs)
-        response  = ibs.ibeis_plugin_deepsense_keypoint_aid(aid, alignment, **kwargs)
-    # ut.embed()
-    # response = ibs.update_response_with_flukebook_ids(response)
+        alignment = ibs.ibeis_plugin_deepsense_align_aid(aid, config=config, **kwargs)
+        response  = ibs.ibeis_plugin_deepsense_keypoint_aid(aid, alignment, config=config, **kwargs)
     return response
 
 
-def deepsense_annot_chip_fpath(ibs, aid):
+def deepsense_annot_chip_fpath(ibs, aid, dim_size=DIM_SIZE, **kwargs):
     config = {
-        'dim_size': 2000,
+        'dim_size': dim_size,
         'resize_dim': 'area',
-        'ext': 'jpg',
+        'ext': '.jpg',
     }
-    #fpath = ibs.get_annot_chip_fpath(aid, ensure=True, config2_=config)
-    fpath = ibs.get_annot_chip_fpath(aid)
+    fpath = ibs.get_annot_chip_fpath(aid, ensure=True, config2_=config)
     return fpath
 
 
 @register_ibs_method
 @register_api('/api/plugin/deepsense/illustration/', methods=['GET'])
 def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, **kwargs):
+    r"""
+    Run the illustration examples
+
+    Args:
+        ibs         (IBEISController): IBEIS controller object
+        annot_uuid  (uuid): Annotation for ID
+
+    CommandLine:
+        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_illustration
+        python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_illustration:0
+
+    Example0:
+        >>> # ENABLE_DOCTEST
+        >>> import ibeis_deepsense
+        >>> import ibeis
+        >>> import utool as ut
+        >>> from ibeis.init import sysres
+        >>> import numpy as np
+        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> print('Using container %s' % container_name)
+        >>> dbdir = sysres.ensure_testdb_identification_example()
+        >>> ibs = ibeis.opendb(dbdir=dbdir)
+        >>> gid_list, aid_list = ibs._ibeis_plugin_deepsense_init_testdb()
+        >>> annot_uuid_list = ibs.get_annot_uuids(aid_list)
+        >>> for annot_uuid in annot_uuid_list:
+        >>>     output_filepath_list = ibs.ibeis_plugin_deepsense_illustration(annot_uuid)
+    """
     alignment = ibs.ibeis_plugin_deepsense_align(annot_uuid)
     keypoints = ibs.ibeis_plugin_deepsense_keypoint(annot_uuid)
-    aid = ibs.aid_from_annot_uuid(annot_uuid)
-    image_path = deepsense_annot_chip_fpath(ibs, aid)
+    aid = aid_from_annot_uuid(ibs, annot_uuid)
+    image_path = deepsense_annot_chip_fpath(ibs, aid, **kwargs)
     # TODO write this func
     #image_path = ibs.get_deepsense_chip_fpath(aid)
     pil_img = Image.open(image_path)
@@ -377,37 +402,50 @@ def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, **kwargs):
         (
             (alignment['localization']['bbox1']['x'], alignment['localization']['bbox1']['y']),
             (alignment['localization']['bbox2']['x'], alignment['localization']['bbox2']['y']),
-        ), outline='red'
+        ),
+        outline='red',
+        width=5,
     )
 
     blowhead = (keypoints['keypoints']['blowhead']['x'], keypoints['keypoints']['blowhead']['y'])
     blowhead_btm, blowhead_top = bounding_box_at_centerpoint(blowhead)
-    draw.ellipse( (blowhead_btm, blowhead_top), outline="green")
+    draw.ellipse( (blowhead_btm, blowhead_top), outline="green", width=5)
 
     bonnet = (keypoints['keypoints']['bonnet']['x'], keypoints['keypoints']['bonnet']['y'])
     bonnet_btm, bonnet_top = bounding_box_at_centerpoint(bonnet)
-    draw.ellipse( (bonnet_btm, bonnet_top), outline="blue")
+    draw.ellipse( (bonnet_btm, bonnet_top), outline="blue", width=5)
 
-    pil_img.save('/home/wildme/tmp/illustration%s.png' % annot_uuid)
+    local_path = dirname(abspath(__file__))
+    output_path = abspath(join(local_path, '..', '_output'))
+    ut.ensuredir(output_path)
+    output_filepath_fmtstr = join(output_path, 'illustration-%s.png')
+    output_filepath = output_filepath_fmtstr % (annot_uuid, )
+
+    print('Writing to %s' % (output_filepath, ))
+    pil_img.save(output_filepath)
+
+    return output_filepath
 
 
-def bounding_box_at_centerpoint(point, radius=5):
+def bounding_box_at_centerpoint(point, radius=15):
     point_less = tuple(coord - radius for coord in point)
     point_more = tuple(coord + radius for coord in point)
     return (point_less, point_more)
 
 
-@register_ibs_method
 def update_response_with_flukebook_ids(ibs, response):
     for score_dict in response['identification']:
         deepsense_id = score_dict['whale_id']
-        flukebook_id = ibs.deepsense_id_to_flukebook(deepsense_id)
+        flukebook_id = ibs.ibeis_plugin_deepsense_id_to_flukebook(deepsense_id)
         score_dict['flukebook_id'] = flukebook_id
     return response
 
 
 class DeepsenseIdentificationConfig(dt.Config):  # NOQA
-    _param_info_list = []
+    _param_info_list = [
+        ut.ParamInfo('dim_size', DIM_SIZE),
+    ]
+
 
 @register_preproc_annot(
     tablename='DeepsenseIdentification', parents=[ANNOTATION_TABLE],
@@ -419,12 +457,15 @@ def ibeis_plugin_deepsense_identify_deepsense_ids_depc(depc, aid_list, config):
     # The doctest for ibeis_plugin_deepsense_identify_deepsense_ids also covers this func
     ibs = depc.controller
     for aid in aid_list:
-        response = ibs.ibeis_plugin_deepsense_identify_aid(aid)
+        response = ibs.ibeis_plugin_deepsense_identify_aid(aid, config=config)
         yield (response, )
 
 
 class DeepsenseAlignmentConfig(dt.Config):  # NOQA
-    _param_info_list = []
+    _param_info_list = [
+        ut.ParamInfo('dim_size', DIM_SIZE),
+    ]
+
 
 @register_preproc_annot(
     tablename='DeepsenseAlignment', parents=[ANNOTATION_TABLE],
@@ -436,11 +477,14 @@ def ibeis_plugin_deepsense_align_deepsense_ids_depc(depc, aid_list, config):
     # The doctest for ibeis_plugin_deepsense_identify_deepsense_ids also covers this func
     ibs = depc.controller
     for aid in aid_list:
-        response = ibs.ibeis_plugin_deepsense_align_aid(aid)
+        response = ibs.ibeis_plugin_deepsense_align_aid(aid, config=config)
         yield (response, )
 
+
 class DeepsenseKeypointsConfig(dt.Config):  # NOQA
-    _param_info_list = []
+    _param_info_list = [
+        ut.ParamInfo('dim_size', DIM_SIZE),
+    ]
 
 
 @register_preproc_annot(
@@ -449,13 +493,13 @@ class DeepsenseKeypointsConfig(dt.Config):  # NOQA
     configclass=DeepsenseKeypointsConfig,
     fname='deepsense',
     chunksize=128)
-def ibeis_plugin_deepsense_align_deepsense_ids_depc(depc, alignment_rowids, config):
+def ibeis_plugin_deepsense_keypoint_deepsense_ids_depc(depc, alignment_rowids, config):
     # The doctest for ibeis_plugin_deepsense_identify_deepsense_ids also covers this func
     ibs = depc.controller
     alignments = depc.get_native('DeepsenseAlignment', alignment_rowids, 'response')
     aid_list = depc.get_ancestor_rowids('DeepsenseAlignment', alignment_rowids)
     for alignment, aid in zip(alignments, aid_list):
-        response = ibs.ibeis_plugin_deepsense_keypoint_aid(aid, alignment)
+        response = ibs.ibeis_plugin_deepsense_keypoint_aid(aid, alignment, config=config)
         yield (response, )
 
 
@@ -514,13 +558,15 @@ class DeepsenseConfig(dt.Config):  # NOQA
         >>> config = DeepsenseConfig()
         >>> result = config.get_cfgstr()
         >>> print(result)
-        Deepsense()
+        Deepsense(dim_size=2000)
     """
     def get_param_info_list(self):
-        return []
+        return [
+            ut.ParamInfo('dim_size', DIM_SIZE),
+        ]
 
 
-class DeepsenseRequest(dt.base.VsOneSimilarityRequest):  # NOQA
+class DeepsenseRequest(dt.base.VsOneSimilarityRequest):
     _symmetric = False
     _tablename = 'Deepsense'
 
@@ -591,14 +637,29 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
         >>> annot_uuid_list = ibs.get_annot_uuids(aid_list)
         >>> annot_name_list = ibs.get_annot_names(aid_list)
         >>> aid_list_ = ibs.add_annots(gid_list, [(0, 0, 1, 1)] * len(gid_list), name_list=annot_name_list)
-        >>> qaid_list = aid_list[1:2]
+        >>> qaid = aid_list[0]
+        >>> qannot_name = annot_name_list[0]
+        >>> qaid_list = [qaid]
         >>> daid_list = aid_list + aid_list_
         >>> root_rowids = tuple(zip(*it.product(qaid_list, daid_list)))
         >>> config = DeepsenseConfig()
         >>> # Call function via request
         >>> request = DeepsenseRequest.new(depc, qaid_list, daid_list)
         >>> result = request.execute()
-        [(-1.0,), (-1.0,), (1.2908857570437249e-05,), (-1.0,), (-1.0,), (0.9205465316772461,), (-1.0,), (1.2908857570437249e-05,), (-1.0,)]
+        >>> am = result[0]
+        >>> unique_nids = am.unique_nids
+        >>> name_score_list = am.name_score_list
+        >>> unique_name_text_list = ibs.get_name_texts(unique_nids)
+        >>> name_score_list_ = ['%0.04f' % (score, ) for score in am.name_score_list]
+        >>> name_score_dict = dict(zip(unique_name_text_list, name_score_list_))
+        >>> print('Queried Deepsense algorithm for ground-truth ID = %s' % (qannot_name, ))
+        >>> result = ut.repr3(name_score_dict)
+        {
+            '64edec9a-b998-4f96-a9d6-6dddcb8f8c0a': '0.8674',
+            '825c5de0-d764-464c-91b6-9e507c5502fd': '0.0000',
+            'bf017955-9ed9-4311-96c9-eed4556cdfdf': '0.0000',
+            'e36c9f90-6065-4354-822d-c0fef25441ad': '0.0000',
+        }
     """
     ibs = depc.controller
 
@@ -608,7 +669,7 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
     assert len(qaids) == 1
     qaid = qaids[0]
     annot_uuid = ibs.get_annot_uuids(qaid)
-    resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=True)
+    resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=True, config=config)
     # update response_json to use flukebook names instead of deepsense
 
     dnames = ibs.get_annot_name_texts(daids)
