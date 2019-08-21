@@ -142,7 +142,7 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, config={}, *
         python -m ibeis_deepsense._plugin --test-ibeis_plugin_deepsense_identify:0
 
     Example0:
-        >>> # ENABLE_DOCTEST
+        >>> # DISABLE_DOCTEST
         >>> import ibeis_deepsense
         >>> import ibeis
         >>> import utool as ut
@@ -171,11 +171,48 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, config={}, *
         >>>     print('[cache] for whale id = %s, got rank %d with score %0.04f' % (annot_name, rank, score, ))
         >>>     rank_list_cache.append(rank)
         >>>     score_list_cache.append('%0.04f' % score)
-        >>> ut.embed()
         >>> assert rank_list == rank_list_cache
         >>> # assert score_list == score_list_cache
         >>> result = (rank_list, score_list)
-        ([0, -1, -1, 0], ['0.8956', '-1.0000', '-1.0000', '0.8638'])
+        ([0, -1, -1, 0], ['0.9052', '-1.0000', '-1.0000', '0.6986'])
+
+    Example1:
+        >>> # DISABLE_DOCTEST
+        >>> import ibeis_deepsense
+        >>> import ibeis
+        >>> import utool as ut
+        >>> from ibeis.init import sysres
+        >>> import numpy as np
+        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> print('Using container %s' % container_name)
+        >>> dbdir = sysres.ensure_testdb_identification_example()
+        >>> ibs = ibeis.opendb(dbdir=dbdir)
+        >>> gid_list, aid_list_ = ibs._ibeis_plugin_deepsense_init_testdb()
+        >>> aid = aid_list_[3]
+        >>> aid_list = [aid] * 10
+        >>> annot_uuid_list = ibs.get_annot_uuids(aid_list)
+        >>> annot_name_list = ibs.get_annot_names(aid_list)
+        >>> rank_list = []
+        >>> score_list = []
+        >>> for annot_uuid, annot_name in zip(annot_uuid_list, annot_name_list):
+        >>>     resp_json = ibs.ibeis_plugin_deepsense_identify(annot_uuid, use_depc=False, container_name=container_name)
+        >>>     rank, score = ibs._ibeis_plugin_deepsense_rank(resp_json, annot_name)
+        >>>     print('[instant] for whale id = %s, got rank %d with score %0.04f' % (annot_name, rank, score, ))
+        >>>     rank_list.append(rank)
+        >>>     score_list.append(score)
+        >>> rank_list = np.array(rank_list)
+        >>> score_list = np.array(score_list)
+        >>> print(np.min(rank_list))
+        >>> print(np.max(rank_list))
+        >>> print(np.mean(rank_list))
+        >>> print(np.std(rank_list))
+        >>> print(np.min(score_list))
+        >>> print(np.max(score_list))
+        >>> print(np.mean(score_list))
+        >>> print(np.std(score_list))
+        >>> ut.embed()
+        >>> result = (rank_list, score_list)
+        ([0, -1, -1, 0], ['0.9052', '-1.0000', '-1.0000', '0.6986'])
     """
     aid = aid_from_annot_uuid(ibs, annot_uuid)
 
@@ -352,15 +389,14 @@ def deepsense_annot_chip_fpath(ibs, aid, dim_size=DIM_SIZE, **kwargs):
     config = {
         'dim_size': dim_size,
         'resize_dim': 'area',
-        'ext': '.jpg',
+        'ext': '.png',
     }
     fpath = ibs.get_annot_chip_fpath(aid, ensure=True, config2_=config)
     return fpath
 
 
 @register_ibs_method
-@register_api('/api/plugin/deepsense/illustration/', methods=['GET'])
-def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, **kwargs):
+def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, output=False, config={}, **kwargs):
     r"""
     Run the illustration examples
 
@@ -388,10 +424,10 @@ def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, **kwargs):
         >>> for annot_uuid in annot_uuid_list:
         >>>     output_filepath_list = ibs.ibeis_plugin_deepsense_illustration(annot_uuid)
     """
-    alignment = ibs.ibeis_plugin_deepsense_align(annot_uuid)
-    keypoints = ibs.ibeis_plugin_deepsense_keypoint(annot_uuid)
+    alignment = ibs.ibeis_plugin_deepsense_align(annot_uuid, config=config)
+    keypoints = ibs.ibeis_plugin_deepsense_keypoint(annot_uuid, config=config)
     aid = aid_from_annot_uuid(ibs, annot_uuid)
-    image_path = deepsense_annot_chip_fpath(ibs, aid, **kwargs)
+    image_path = deepsense_annot_chip_fpath(ibs, aid, **config)
     # TODO write this func
     #image_path = ibs.get_deepsense_chip_fpath(aid)
     pil_img = Image.open(image_path)
@@ -415,16 +451,79 @@ def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, **kwargs):
     bonnet_btm, bonnet_top = bounding_box_at_centerpoint(bonnet)
     draw.ellipse( (bonnet_btm, bonnet_top), outline="blue", width=5)
 
-    local_path = dirname(abspath(__file__))
-    output_path = abspath(join(local_path, '..', '_output'))
-    ut.ensuredir(output_path)
-    output_filepath_fmtstr = join(output_path, 'illustration-%s.png')
-    output_filepath = output_filepath_fmtstr % (annot_uuid, )
+    if output:
+        local_path = dirname(abspath(__file__))
+        output_path = abspath(join(local_path, '..', '_output'))
+        ut.ensuredir(output_path)
+        output_filepath_fmtstr = join(output_path, 'illustration-%s.png')
+        output_filepath = output_filepath_fmtstr % (annot_uuid, )
+        print('Writing to %s' % (output_filepath, ))
+        pil_img.save(output_filepath)
 
-    print('Writing to %s' % (output_filepath, ))
-    pil_img.save(output_filepath)
+    return pil_img
 
-    return output_filepath
+
+@register_ibs_method
+def ibeis_plugin_deepsense_passport(ibs, annot_uuid, output=False, config={}, **kwargs):
+    keypoints = ibs.ibeis_plugin_deepsense_keypoint(annot_uuid, config=config)
+    aid = aid_from_annot_uuid(ibs, annot_uuid)
+    image_path = deepsense_annot_chip_fpath(ibs, aid, **config)
+    # TODO write this func
+    #image_path = ibs.get_deepsense_chip_fpath(aid)
+    pil_img = Image.open(image_path)
+
+    # add padding on all sides of the image to prevent cutoff
+    orig_size_np = np.array(pil_img.size)
+    new_size = tuple(orig_size_np * 3)
+    canvas = Image.new("RGB", new_size)
+    canvas.paste(pil_img, pil_img.size)
+
+    # get new coords of the blowhead and bonnet to use for rotation
+    blowhead_np = np.array((keypoints['keypoints']['blowhead']['x'], keypoints['keypoints']['blowhead']['y']))
+    blowhead_np += orig_size_np
+    bonnet_np = np.array((keypoints['keypoints']['bonnet']['x'], keypoints['keypoints']['bonnet']['y']))
+    bonnet_np += orig_size_np
+    bonnet = tuple(bonnet_np)
+
+    # rotate along the whale's axis
+    angle = keypoints['keypoints']['angle']
+    angle -= 90.0  # deepsense is left-aligned by default, we prefer top-aligned
+    # translate coords are the difference from the blowhold to the center of the image
+    blowhole = bonnet_np
+    center = orig_size_np * 1.5
+    translate = tuple(center - blowhole)
+    canvas = canvas.rotate(angle, center=bonnet, translate=translate, resample=Image.NEAREST)
+
+    # crop down to a square around the keypoints
+    axis_line = blowhead_np - bonnet_np
+    unit_size = np.hypot(axis_line[0], axis_line[1])
+    crop_1 = center - np.array((unit_size, 1.5 * unit_size))
+    crop_2 = center + np.array((unit_size, 0.5 * unit_size))
+    # PIL.Image.crop needs a 4-tuple of ints for the crop function
+    crop_box = tuple(np.concatenate((crop_1, crop_2)).astype(int))
+    canvas = canvas.crop(crop_box)
+
+    # resize the image to standard
+    square_size = 1000
+    canvas = canvas.resize((square_size, square_size), resample=Image.LANCZOS)
+    # now draw ellipses on the blowhole and bonnet.
+    # because of the rotation, centering, and now resizing, we know these will always be in the exact same pixel location
+    draw = ImageDraw.Draw(canvas)
+    bonnet_coords = bounding_box_at_centerpoint((square_size / 2, square_size / 4))
+    draw.ellipse( bonnet_coords, outline="green", width=2)
+    blowhole_coords = bounding_box_at_centerpoint((square_size / 2, square_size * 3 / 4))
+    draw.ellipse( blowhole_coords, outline="blue", width=2)
+
+    if output:
+        local_path = dirname(abspath(__file__))
+        output_path = abspath(join(local_path, '..', '_output'))
+        ut.ensuredir(output_path)
+        output_filepath_fmtstr = join(output_path, 'passport-%s.png')
+        output_filepath = output_filepath_fmtstr % (annot_uuid, )
+        print('Writing to %s' % (output_filepath, ))
+        canvas.save(output_filepath)
+
+    return canvas
 
 
 def bounding_box_at_centerpoint(point, radius=15):
@@ -503,6 +602,59 @@ def ibeis_plugin_deepsense_keypoint_deepsense_ids_depc(depc, alignment_rowids, c
         yield (response, )
 
 
+class DeepsenseIllustrationConfig(dt.Config):  # NOQA
+    _param_info_list = [
+        ut.ParamInfo('dim_size', DIM_SIZE),
+        ut.ParamInfo('ext', '.jpg')
+    ]
+
+
+def pil_image_load(absolute_path):
+    pil_img = Image.open(absolute_path)
+    return pil_img
+
+
+def pil_image_write(absolute_path, pil_img):
+    pil_img.save(absolute_path)
+
+
+@register_preproc_annot(
+    tablename='DeepsenseIllustration', parents=[ANNOTATION_TABLE],
+    colnames=['image'], coltypes=[('extern', pil_image_load, pil_image_write)],
+    configclass=DeepsenseIllustrationConfig,
+    fname='deepsense',
+    chunksize=128)
+def ibeis_plugin_deepsense_illustrate_deepsense_ids_depc(depc, aid_list, config):
+    # The doctest for ibeis_plugin_deepsense_identify_deepsense_ids also covers this func
+    ibs = depc.controller
+    annot_uuid_list = ibs.get_annot_uuids(aid_list)
+    for annot_uuid in annot_uuid_list:
+        response = ibs.ibeis_plugin_deepsense_illustration(annot_uuid, config=config)
+        yield (response, )
+
+
+class DeepsensePassportConfig(dt.Config):  # NOQA
+    _param_info_list = [
+        ut.ParamInfo('dim_size', DIM_SIZE),
+        ut.ParamInfo('ext', '.jpg')
+    ]
+
+
+@register_preproc_annot(
+    tablename='DeepsensePassport', parents=[ANNOTATION_TABLE],
+    colnames=['image'], coltypes=[('extern', pil_image_load, pil_image_write)],
+    configclass=DeepsensePassportConfig,
+    fname='deepsense',
+    chunksize=128)
+def ibeis_plugin_deepsense_passport_deepsense_ids_depc(depc, aid_list, config):
+    # The doctest for ibeis_plugin_deepsense_identify_deepsense_ids also covers this func
+    ibs = depc.controller
+    annot_uuid_list = ibs.get_annot_uuids(aid_list)
+    for annot_uuid in annot_uuid_list:
+        response = ibs.ibeis_plugin_deepsense_passport(annot_uuid, config=config)
+        yield (response, )
+
+
 def get_match_results(depc, qaid_list, daid_list, score_list, config):
     """ converts table results into format for ipython notebook """
     #qaid_list, daid_list = request.get_parent_rowids()
@@ -574,14 +726,13 @@ class DeepsenseRequest(dt.base.VsOneSimilarityRequest):
     def get_fmatch_overlayed_chip(request, aid_list, config=None):
         depc = request.depc
         ibs = depc.controller
-        chips = ibs.get_annot_chips(aid_list, config=request.config)
-        return chips
+        passport_paths = ibs.depc_annot.get('DeepsensePassport', aid_list, 'image', config=config, read_extern=False, ensure=True)
+        passports = vt.imread(passport_paths)
+        return passports
 
     def render_single_result(request, cm, aid, **kwargs):
         # HACK FOR WEB VIEWER
-        overlay = kwargs.get('draw_fmatches')
-        chips = request.get_fmatch_overlayed_chip([cm.qaid, aid], overlay=overlay,
-                                                  config=request.config)
+        chips = request.get_fmatch_overlayed_chip([cm.qaid, aid], config=request.config)
         import vtool as vt
         out_img = vt.stack_image_list(chips)
         return out_img
@@ -622,7 +773,7 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
         python -m ibeis_deepsense._plugin --exec-ibeis_plugin_deepsense:0
 
     Example0:
-        >>> # ENABLE_DOCTEST
+        >>> # DISABLE_DOCTEST
         >>> from ibeis_deepsense._plugin import *
         >>> import ibeis
         >>> import itertools as it
@@ -655,10 +806,10 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
         >>> print('Queried Deepsense algorithm for ground-truth ID = %s' % (qannot_name, ))
         >>> result = ut.repr3(name_score_dict)
         {
-            '64edec9a-b998-4f96-a9d6-6dddcb8f8c0a': '0.8674',
+            '64edec9a-b998-4f96-a9d6-6dddcb8f8c0a': '0.8082',
             '825c5de0-d764-464c-91b6-9e507c5502fd': '0.0000',
             'bf017955-9ed9-4311-96c9-eed4556cdfdf': '0.0000',
-            'e36c9f90-6065-4354-822d-c0fef25441ad': '0.0000',
+            'e36c9f90-6065-4354-822d-c0fef25441ad': '0.0001',
         }
     """
     ibs = depc.controller
