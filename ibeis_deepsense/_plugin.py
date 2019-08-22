@@ -758,7 +758,7 @@ class DeepsenseRequest(dt.base.VsOneSimilarityRequest):
         depc = request.depc
         ibs = depc.controller
         passport_paths = ibs.depc_annot.get('DeepsensePassport', aid_list, 'image', config=config, read_extern=False, ensure=True)
-        passports = vt.imread(passport_paths)
+        passports = list(map(vt.imread, passport_paths))
         return passports
 
     def render_single_result(request, cm, aid, **kwargs):
