@@ -37,7 +37,39 @@ ID_MAP = None
 
 
 def _ibeis_plugin_deepsense_check_container(url):
-    ut.embed()
+    endpoints = {
+        'api/alignment' : ['POST'],
+        'api/keypoints' : ['POST'],
+        'api/classify'  : ['POST'],
+    }
+    flag_list = []
+    endpoint_list = list(endpoints.keys())
+    for endpoint in endpoint_list:
+        flag = False
+        required_methods = set(endpoints[endpoint])
+        supported_methods = None
+        url_ = 'http://%s/%s' % (url, endpoint, )
+
+        try:
+            response = requests.options(url_)
+        except:
+            response = None
+
+        if response is not None and response.status_code:
+            headers = response.headers
+            allow = headers.get('Allow', '')
+            supported_methods_ = [method.strip().upper() for method in allow.split(',')]
+            supported_methods = set(supported_methods_)
+            if len(required_methods - supported_methods) == 0:
+                flag = True
+        if not flag:
+            args = (endpoint, )
+            print('[ibeis_deepsense - FAILED CONTAINER ENSURE CHECK] Endpoint %r failed the check' % args)
+            print('\tRequired Methods:  %r' % (required_methods, ))
+            print('\tSupported Methods: %r' % (supported_methods, ))
+        flag_list.append(flag)
+    supported = np.all(flag_list)
+    return supported
 
 
 docker_control.docker_register_config(None, 'deepsense', 'wildme.azurecr.io/ibeis/deepsense:latest', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
@@ -210,7 +242,6 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, config={}, *
         >>> print(np.max(score_list))
         >>> print(np.mean(score_list))
         >>> print(np.std(score_list))
-        >>> ut.embed()
         >>> result = (rank_list, score_list)
         ([0, -1, -1, 0], ['0.9052', '-1.0000', '-1.0000', '0.6986'])
     """
@@ -855,9 +886,9 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
         yield (value, )
 
 
-@register_ibs_method
-def deepsense_embed(ibs):
-    ut.embed()
+# @register_ibs_method
+# def deepsense_embed(ibs):
+#     ut.embed()
 
 
 if __name__ == '__main__':
