@@ -24,7 +24,9 @@ register_preproc_annot = controller_inject.register_preprocs['annot']
 u"""
 Interfacing with the ACR from python is a headache, so for now we will assume that
 the docker image has already been downloaded. Command:
-docker pull wildme.azurecr.io/ibeis/deepsense
+
+docker pull wildme.azurecr.io/ibeis/deepsense:latest
+
 """
 
 
@@ -45,13 +47,14 @@ def _ibeis_plugin_deepsense_check_container(url):
     flag_list = []
     endpoint_list = list(endpoints.keys())
     for endpoint in endpoint_list:
+        print('Checking endpoint %r against url %r' % (endpoint, url, ))
         flag = False
         required_methods = set(endpoints[endpoint])
         supported_methods = None
         url_ = 'http://%s/%s' % (url, endpoint, )
 
         try:
-            response = requests.options(url_)
+            response = requests.options(url_, timeout=1)
         except:
             response = None
 
@@ -67,6 +70,7 @@ def _ibeis_plugin_deepsense_check_container(url):
             print('[ibeis_deepsense - FAILED CONTAINER ENSURE CHECK] Endpoint %r failed the check' % args)
             print('\tRequired Methods:  %r' % (required_methods, ))
             print('\tSupported Methods: %r' % (supported_methods, ))
+        print('\tFlag: %r' % (flag, ))
         flag_list.append(flag)
     supported = np.all(flag_list)
     return supported
@@ -122,7 +126,15 @@ def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense', **kwa
     global BACKEND_URL
     # make sure that the container is online using docker_control functions
     if BACKEND_URL is None:
-        BACKEND_URL = ibs.docker_ensure(container_name)
+        BACKEND_URLS = ibs.docker_ensure(container_name)
+        if len(BACKEND_URLS) == 0:
+            raise RuntimeError('Could not ensure container')
+        elif len(BACKEND_URLS) == 1:
+            BACKEND_URL = BACKEND_URLS[0]
+        else:
+            BACKEND_URL = BACKEND_URLS[0]
+            args = (BACKEND_URLS, BACKEND_URL, )
+            print('[WARNING] Multiple BACKEND_URLS:\n\tFound: %r\n\tUsing: %r' % args)
     return BACKEND_URL
 
 
@@ -287,7 +299,7 @@ def ibeis_plugin_deepsense_identify_aid(ibs, aid, config={}, **kwargs):
     }
     url = 'http://%s/api/classify' % (url)
     print('Sending identify to %s' % url)
-    response = requests.post(url, json=data)
+    response = requests.post(url, json=data, timeout=120)
     assert response.status_code == 200
     response = response.json()
     response = update_response_with_flukebook_ids(ibs, response)
@@ -303,7 +315,7 @@ def ibeis_plugin_deepsense_align_aid(ibs, aid, config={}, **kwargs):
     }
     url = 'http://%s/api/alignment' % (url)
     print('Sending alignment to %s' % url)
-    response = requests.post(url, json=data)
+    response = requests.post(url, json=data, timeout=120)
     assert response.status_code == 200
     return response.json()
 
@@ -316,7 +328,7 @@ def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, config={}, *
     data['image'] = b64_image
     url = 'http://%s/api/keypoints' % (url)
     print('Sending keypoints to %s' % url)
-    response = requests.post(url, json=data)
+    response = requests.post(url, json=data, timeout=120)
     assert response.status_code == 200
     return response.json()
 
