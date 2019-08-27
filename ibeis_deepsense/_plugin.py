@@ -126,6 +126,13 @@ def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense', **kwa
     global BACKEND_URL
     # make sure that the container is online using docker_control functions
     if BACKEND_URL is None:
+        # Register depc blacklist
+        prop_list = [None, 'theta', 'verts', 'species', 'name', 'yaws']
+        for prop in prop_list:
+            ibs.depc_annot.register_delete_table_exclusion('DeepsenseIdentification', prop)
+            ibs.depc_annot.register_delete_table_exclusion('DeepsenseAlignment',      prop)
+            ibs.depc_annot.register_delete_table_exclusion('DeepsenseKeypoint',       prop)
+
         BACKEND_URLS = ibs.docker_ensure(container_name)
         if len(BACKEND_URLS) == 0:
             raise RuntimeError('Could not ensure container')
@@ -429,11 +436,33 @@ def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=True, config={}, *
 
 
 def deepsense_annot_chip_fpath(ibs, aid, dim_size=DIM_SIZE, **kwargs):
-    config = {
-        'dim_size': dim_size,
-        'resize_dim': 'area',
-        'ext': '.png',
-    }
+
+    gid = ibs.get_annot_gids(aid)
+    w, h = ibs.get_image_sizes(gid)
+    xtl, ytl, w_, h_ = ibs.get_annot_bboxes(aid)
+    image_area = w * h
+    if image_area <= 1:
+        image_area = -1
+    annot_area = w_ * h_
+    coverage = annot_area / image_area
+    trivial = coverage >= 0.99
+    print('[Deepsense] Trivial config?: %r (area percentage = %0.02f)' % (trivial, coverage, ))
+
+    if trivial:
+        config = {
+            'dim_size': dim_size,
+            'resize_dim': 'area',
+            'ext': '.jpg',
+        }
+    else:
+        config = {
+            'dim_size': dim_size // 2,
+            'resize_dim': 'area',
+            'pad': 0.99,
+            'ext': '.jpg',
+        }
+    print('[Deepsense] Using chip_fpath config = %s' % (ut.repr3(config), ))
+
     fpath = ibs.get_annot_chip_fpath(aid, ensure=True, config2_=config)
     return fpath
 
@@ -498,7 +527,7 @@ def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, output=False, config={}
         local_path = dirname(abspath(__file__))
         output_path = abspath(join(local_path, '..', '_output'))
         ut.ensuredir(output_path)
-        output_filepath_fmtstr = join(output_path, 'illustration-%s.png')
+        output_filepath_fmtstr = join(output_path, 'illustration-%s.jpg')
         output_filepath = output_filepath_fmtstr % (annot_uuid, )
         print('Writing to %s' % (output_filepath, ))
         pil_img.save(output_filepath)
@@ -561,7 +590,7 @@ def ibeis_plugin_deepsense_passport(ibs, annot_uuid, output=False, config={}, **
         local_path = dirname(abspath(__file__))
         output_path = abspath(join(local_path, '..', '_output'))
         ut.ensuredir(output_path)
-        output_filepath_fmtstr = join(output_path, 'passport-%s.png')
+        output_filepath_fmtstr = join(output_path, 'passport-%s.jpg')
         output_filepath = output_filepath_fmtstr % (annot_uuid, )
         print('Writing to %s' % (output_filepath, ))
         canvas.save(output_filepath)
