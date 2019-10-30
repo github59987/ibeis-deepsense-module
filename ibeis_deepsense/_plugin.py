@@ -76,10 +76,10 @@ def _ibeis_plugin_deepsense_check_container(url):
     return supported
 
 
-docker_control.docker_register_config(None, 'deepsense', 'wildme.azurecr.io/ibeis/deepsense:latest', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
+docker_control.docker_register_config(None, 'flukebook_deepsense', 'wildme.azurecr.io/ibeis/deepsense:latest', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
 # next two lines for comparing containers side-by-side
-docker_control.docker_register_config(None, 'deepsense2', 'wildme.azurecr.io/ibeis/deepsense:app2', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
-docker_control.docker_register_config(None, 'deepsense5', 'wildme.azurecr.io/ibeis/deepsense:app5', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
+docker_control.docker_register_config(None, 'flukebook_deepsense2', 'wildme.azurecr.io/ibeis/deepsense:app2', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
+docker_control.docker_register_config(None, 'flukebook_deepsense5', 'wildme.azurecr.io/ibeis/deepsense:app5', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
 
 
 @register_ibs_method
@@ -122,7 +122,7 @@ def ibeis_plugin_deepsense_id_to_flukebook(ibs, deepsense_id):
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense', **kwargs):
+def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='flukebook_deepsense', **kwargs):
     global BACKEND_URL
     # make sure that the container is online using docker_control functions
     if BACKEND_URL is None:
@@ -146,7 +146,7 @@ def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='deepsense', **kwa
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_ensure_id_map(ibs, container_name='deepsense'):
+def ibeis_plugin_deepsense_ensure_id_map(ibs, container_name='flukebook_deepsense'):
     global ID_MAP
     # make sure that the container is online using docker_control functions
     if ID_MAP is None:
@@ -199,7 +199,7 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, config={}, *
         >>> import utool as ut
         >>> from ibeis.init import sysres
         >>> import numpy as np
-        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> container_name = ut.get_argval('--container', default='flukebook_deepsense')
         >>> print('Using container %s' % container_name)
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
@@ -234,7 +234,7 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, config={}, *
         >>> import utool as ut
         >>> from ibeis.init import sysres
         >>> import numpy as np
-        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> container_name = ut.get_argval('--container', default='flukebook_deepsense')
         >>> print('Using container %s' % container_name)
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
@@ -361,7 +361,7 @@ def ibeis_plugin_deepsense_align(ibs, annot_uuid, use_depc=True, config={}, **kw
         >>> import utool as ut
         >>> from ibeis.init import sysres
         >>> import numpy as np
-        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> container_name = ut.get_argval('--container', default='flukebook_deepsense')
         >>> print('Using container %s' % container_name)
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
@@ -407,7 +407,7 @@ def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=True, config={}, *
         >>> import utool as ut
         >>> from ibeis.init import sysres
         >>> import numpy as np
-        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> container_name = ut.get_argval('--container', default='flukebook_deepsense')
         >>> print('Using container %s' % container_name)
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
@@ -487,7 +487,7 @@ def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, output=False, config={}
         >>> import utool as ut
         >>> from ibeis.init import sysres
         >>> import numpy as np
-        >>> container_name = ut.get_argval('--container', default='deepsense')
+        >>> container_name = ut.get_argval('--container', default='flukebook_deepsense')
         >>> print('Using container %s' % container_name)
         >>> dbdir = sysres.ensure_testdb_identification_example()
         >>> ibs = ibeis.opendb(dbdir=dbdir)
