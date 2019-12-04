@@ -819,7 +819,7 @@ class DeepsenseRequest(dt.base.VsOneSimilarityRequest):
         return cm_list
 
     def execute(request, *args, **kwargs):
-        kwargs['use_cache'] = False
+        # kwargs['use_cache'] = False
         result_list = super(DeepsenseRequest, request).execute(*args, **kwargs)
         qaids = kwargs.pop('qaids', None)
         if qaids is not None:
