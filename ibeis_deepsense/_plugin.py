@@ -34,7 +34,7 @@ DIM_SIZE = 2000
 BACKEND_URL = None
 
 
-INDIVIDUAL_MAP_FPATH = 'https://wildbookiarepository.blob.core.windows.net/random/deepsense.flukebook.v0.csv'
+INDIVIDUAL_MAP_FPATH = 'https://wildbookiarepository.azureedge.net/random/deepsense.flukebook.v0.csv'
 ID_MAP = None
 
 
