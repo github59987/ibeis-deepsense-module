@@ -213,7 +213,7 @@ def ibeis_plugin_deepsense_identify(ibs, annot_uuid, use_depc=True, config={}, *
         >>>     rank, score = ibs._ibeis_plugin_deepsense_rank(resp_json, annot_name)
         >>>     print('[instant] for whale id = %s, got rank %d with score %0.04f' % (annot_name, rank, score, ))
         >>>     rank_list.append(rank)
-        >>>     score_list.append('%0.04f' % score)
+            >>>     score_list.append('%0.04f' % score)
         >>> response_list = ibs.depc_annot.get('DeepsenseIdentification', aid_list, 'response')
         >>> rank_list_cache = []
         >>> score_list_cache = []
@@ -435,6 +435,7 @@ def ibeis_plugin_deepsense_keypoint(ibs, annot_uuid, use_depc=True, config={}, *
     return response
 
 
+@register_ibs_method
 def deepsense_annot_chip_fpath(ibs, aid, dim_size=DIM_SIZE, **kwargs):
 
     gid = ibs.get_annot_gids(aid)
@@ -930,6 +931,287 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
 # @register_ibs_method
 # def deepsense_embed(ibs):
 #     ut.embed()
+
+
+# Metadata schema:
+# ● Image : str ​column with image names
+# ● whaleId : int ​id of whale present on image
+# ● callosity : int
+# ● blowhead_x : int ​x coordinate of whales blowhead
+# ● ​blowhead_y : int ​y coordinate of whales blowhead
+# ● bonnet_x : int ​x coordinate of whales bonnet
+# ● bonnet_y : int ​y coordinate of whales bonnet
+# ● height : int ​image height
+# ● width : int ​image width
+# ● bbox1_x : float ​x coordinate of whales bbox top left corner
+# ● bbox1_y : float ​y coordinate of whales bbox top left corner
+# ● bbox2_x : float ​x coordinate of whales bbox bottom right corner
+# ● bbox2_y : float ​y coordinate of whales bbox bottom right corner
+# example rows:
+# Image,whaleID,bbox1_x,bbox1_y,bbox2_x,bbox2_y,height,width,callosity,bonnet_x,bonnet_y,blowhead_x,blowhead_y
+# 10000.jpg,1950,757,593,1009,839,1360,2048,2,898,656,804,754
+@register_ibs_method
+def retraining_metadata(ibs, aid_list):
+    fpath = ibs.deepsense_annot_chip_fpath_list(aid_list)
+    return fpath
+
+
+@register_ibs_method
+def deepsense_retraining_metadata_list(ibs, aid_list):
+    num_annots = len(aid_list)
+    fpaths = [ibs.deepsense_annot_chip_fpath(aid) for aid in aid_list]
+    assert len(fpaths) == num_annots
+    names  = ibs.get_annot_nids(aid_list)
+    assert len(names)  == num_annots
+    keypoints = ibs.depc_annot.get('DeepsenseKeypoint', aid_list, 'response')
+    # contains keypoint['blowhead']['x'] and keypoint['bonnet']['y'] etc
+    # check that keypoints are relative the chip_fpath or the image_fpath
+    # keypoints = [keypoint['keypoints'] for keypoint in keypoints]
+    # assert len(keypoints) == num_annots
+
+    # is this worth it to only list-traverse once? lol. seems likely over-optimization.
+    # THIS MUST BE WHERE BAD THINGS HAPPEN
+    blow_xs = [row['keypoints']['blowhead']['x'] for row in keypoints]
+    blow_ys = [row['keypoints']['blowhead']['y'] for row in keypoints]
+    bonn_xs = [row['keypoints']['bonnet']['x']   for row in keypoints]
+    bonn_ys = [row['keypoints']['bonnet']['y']   for row in keypoints]
+
+    # blowx_blowy_bonx_bony = [
+    #     [keypoint['blowhead']['x'], keypoint['blowhead']['y'],
+    #      keypoint['bonnet']['x'],   keypoint['bonnet']['y']]
+    #     for keypoint in keypoints
+    # ]
+    # blow_xs, blow_ys, bonn_xs, bonn_ys = np.transpose(blowx_blowy_bonx_bony)
+    # for feat_list in (blow_xs, blow_ys, bonn_xs, bonn_ys):
+    #     assert len(feat_list) == num_annots
+
+    # TODO: optimize this so it doesn't have to actually load all the images
+    gid_list = ibs.get_annot_gids(aid_list)
+    wh_list  = ibs.get_image_sizes(gid_list)
+    assert len(wh_list) == num_annots
+    widths  = [wh[0] for wh in wh_list]
+    heights = [wh[1] for wh in wh_list]
+
+    bboxes = ibs.get_annot_bboxes(aid_list)
+    assert len(bboxes) == num_annots
+    bbox1_xs = [bbox[0] for bbox in bboxes]
+    bbox1_ys = [bbox[1] for bbox in bboxes]
+    bbox2_xs = [bbox[2] for bbox in bboxes]
+    bbox2_ys = [bbox[3] for bbox in bboxes]
+
+    # trying this bc don't trust the widths and heights above
+    widths  = [x2 - x1 for (x1, x2) in zip(bbox1_xs, bbox2_xs)]
+    print('10 widths: %s' % widths[:10])
+    heights = [y2 - y1 for (y1, y2) in zip(bbox1_ys, bbox2_ys)]
+
+    callosities = [0] * num_annots
+
+    header_row = [
+        'Image',
+        'whaleID',
+        'callosity',
+        'blowhead_x',
+        'blowhead_y',
+        'bonnet_x',
+        'bonnet_y',
+        'height',
+        'width',
+        'bbox1_x',
+        'bbox1_y',
+        'bbox2_x',
+        'bbox2_y',
+    ]
+
+    # we could skip zipping below by using ut.make_standard_csv
+    full_ans = np.array([
+        fpaths,
+        names,
+        callosities,
+        blow_xs,
+        blow_ys,
+        bonn_xs,
+        bonn_ys,
+        heights,
+        widths,
+        bbox1_xs,
+        bbox1_ys,
+        bbox2_xs,
+        bbox2_ys,
+    ])
+
+    cleaned_ans = ibs.heuristically_clean_trainingset(full_ans)
+
+    csv_str = ut.make_standard_csv(cleaned_ans, header_row)
+
+    return csv_str
+
+
+@register_ibs_method
+def heuristically_clean_trainingset(ibs, full_ans):
+    cleaned_ans = []
+    working_ans = np.transpose(full_ans)
+    print('heuristically_clean_trainingset called on %s rows' % len(working_ans))
+    for row in working_ans:
+        blow_x, blow_y = int(row[3]), int(row[4])
+        bonn_x, bonn_y = int(row[5]), int(row[6])
+        height, width  = int(row[7]), int(row[8])
+        print ('our 6 vals are %s, %s, %s, %s, %s, %s' % (blow_x, blow_y, bonn_x, bonn_y, height, width))
+        if (
+            point_within_aoi(blow_x, blow_y, width, height) and
+            point_within_aoi(bonn_x, bonn_y, width, height)
+        ):
+            cleaned_ans += [row]
+    print('heuristically_clean_trainingset now has  %s rows' % len(cleaned_ans))
+    diff = len(working_ans) - len(cleaned_ans)
+    print(' we removed %s rows, %s percent' % (diff, (100 * diff / len(working_ans)) ) )
+    return np.transpose(cleaned_ans)
+
+
+# because sometimes our keypoints don't fall in the central square
+def point_within_aoi(x, y, width, height, delta=10):
+    # box_height = height  3
+    # box_width  = width  / 3
+    # here assuming height/width refer to the subset
+    return (
+        x > width - delta     and
+        x < 2 * width + delta and
+        y > height - delta     and
+        y < 2 * height + delta
+    )
+
+
+# goal is to overlay the bbox, blowhole and bonnet from the deepsense metadata
+@register_ibs_method
+def deepsense_illustrate_metadata(ibs, species, limit=10, imgdir='/home/wildme/code/ibeis-deepsense-module/retraining/check_trainingset/'):
+    aid_list = ibs.get_valid_aids(species=species)
+    aid_list = aid_list[:limit]
+
+    metadata = ibs.deepsense_retraining_metadata_list(aid_list)
+    dicts = csv_string_to_dicts(metadata)
+
+    for i in range(len(dicts)):
+        illustrate_metadata_helper(dicts[i], i, imgdir)
+
+    return dicts
+
+
+def illustrate_metadata_helper(row, i, imgdir):
+    pil_img = Image.open(row['Image'])
+    canvas = Image.new("RGB", pil_img.size)
+    canvas.paste(pil_img)
+    draw = ImageDraw.Draw(canvas)
+
+    blowhead_point  = (int(row['blowhead_x']), int(row['blowhead_y']))
+    blowhead_coords = bounding_box_at_centerpoint(blowhead_point)
+    draw.ellipse(blowhead_coords, outline="green", width=2)
+
+    bonnet_point  = (int(row['bonnet_x']), int(row['bonnet_y']))
+    bonnet_coords = bounding_box_at_centerpoint(bonnet_point)
+    draw.ellipse(bonnet_coords, outline="red", width=2)
+
+    ut.ensuredir(imgdir)
+    output_filepath = join(imgdir, (str(i) + '.jpg'))
+    print('saving to %s' % output_filepath)
+    canvas.save(output_filepath)
+    return canvas
+
+
+def csv_string_to_dicts(csvstring):
+    csvstring = csvstring.replace('\r', '')
+    rows = csvstring.split('\n')
+    rows = [row.split(',') for row in rows]
+    header = rows[0]
+    rows   = rows[1:-1]  # -1 bc of a trailing empty string from initial split
+    # dicts = [{header[i]: row[i] for i in len(range(header))} for row in rows]
+    # dicts = []
+    # for row in rows:
+    #     dicts += [{header[i]: row[i] for i in range(len(header))}]
+    dicts = [{header[i]: row[i] for i in range(len(header))} for row in rows]
+    return dicts
+
+
+@register_ibs_method
+def deepsense_retraining_metadata_list_full_img(ibs, aid_list):
+    num_annots = len(aid_list)
+    fpaths = [ibs.deepsense_annot_chip_fpath(aid) for aid in aid_list]
+    assert len(fpaths) == num_annots
+    names  = ibs.get_annot_nids(aid_list)
+    assert len(names)  == num_annots
+    keypoints = ibs.depc_annot.get('DeepsenseKeypoint', aid_list, 'response')
+    # contains keypoint['blowhead']['x'] and keypoint['bonnet']['y'] etc
+    # check that keypoints are relative the chip_fpath or the image_fpath
+    # keypoints = [keypoint['keypoints'] for keypoint in keypoints]
+    # assert len(keypoints) == num_annots
+
+    # is this worth it to only list-traverse once? lol. seems likely over-optimization.
+    # is this worth it to only list-traverse once? lol. seems likely over-optimization.
+    # THIS MUST BE WHERE BAD THINGS HAPPEN
+    blow_xs = [row['keypoints']['blowhead']['x'] for row in keypoints]
+    blow_ys = [row['keypoints']['blowhead']['y'] for row in keypoints]
+    bonn_xs = [row['keypoints']['bonnet']['x']   for row in keypoints]
+    bonn_ys = [row['keypoints']['bonnet']['y']   for row in keypoints]
+
+    # blowx_blowy_bonx_bony = [
+    #     [keypoint['blowhead']['x'], keypoint['blowhead']['y'],
+    #      keypoint['bonnet']['x'],   keypoint['bonnet']['y']]
+    #     for keypoint in keypoints
+    # ]
+    # blow_xs, blow_ys, bonn_xs, bonn_ys = np.transpose(blowx_blowy_bonx_bony)
+    for feat_list in (blow_xs, blow_ys, bonn_xs, bonn_ys):
+        assert len(feat_list) == num_annots
+
+    # TODO: optimize this so it doesn't have to actually load all the images
+    gid_list = ibs.get_annot_gids(aid_list)
+    wh_list  = ibs.get_image_sizes(gid_list)
+    assert len(wh_list) == num_annots
+    widths  = [wh[0] for wh in wh_list]
+    heights = [wh[1] for wh in wh_list]
+
+    bboxes = ibs.get_annot_bboxes(aid_list)
+    assert len(bboxes) == num_annots
+    bbox1_xs = [bbox[0] for bbox in bboxes]
+    bbox1_ys = [bbox[1] for bbox in bboxes]
+    bbox2_xs = [bbox[2] for bbox in bboxes]
+    bbox2_ys = [bbox[3] for bbox in bboxes]
+
+    callosities = [0] * num_annots
+
+    header_row = [
+        'Image',
+        'whaleID',
+        'callosity',
+        'blowhead_x',
+        'blowhead_y',
+        'bonnet_x',
+        'bonnet_y',
+        'height',
+        'width',
+        'bbox1_x',
+        'bbox1_y',
+        'bbox2_x',
+        'bbox2_y',
+    ]
+
+    # we could skip zipping below by using ut.make_standard_csv
+    full_ans = np.array([
+        fpaths,
+        names,
+        callosities,
+        blow_xs,
+        blow_ys,
+        bonn_xs,
+        bonn_ys,
+        heights,
+        widths,
+        bbox1_xs,
+        bbox1_ys,
+        bbox2_xs,
+        bbox2_ys,
+    ])
+
+    csv_str = ut.make_standard_csv(full_ans, header_row)
+
+    return csv_str
 
 
 if __name__ == '__main__':
