@@ -33,9 +33,10 @@ docker pull wildme.azurecr.io/ibeis/deepsense:latest
 DIM_SIZE = 2000
 BACKEND_URL = None
 
-
 INDIVIDUAL_MAP_FPATH = 'https://wildbookiarepository.azureedge.net/random/deepsense.flukebook.v0.csv'
+AUSTRALIS_MAP_FPATH  = '/home/wildme/code/ibeis-deepsense-module/retraining/deepsense.australis.v1.csv'
 ID_MAP = None
+AUSTRALIS_ID_MAP = None
 
 
 def _ibeis_plugin_deepsense_check_container(url):
@@ -156,6 +157,7 @@ def ibeis_plugin_deepsense_ensure_id_map(ibs, container_name='flukebook_deepsens
     return ID_MAP
 
 
+# I changed this to not be dependent on ints; warning untested
 def dict_from_csv(csv_obj):
     import uuid
     id_dict = {}
@@ -163,10 +165,9 @@ def dict_from_csv(csv_obj):
     row_list = row_list[1:]  # skip header row
     for row in row_list:
         deepsense_id = row[0]
-        try:
+        if deepsense_id.isdigit():
             deepsense_id = int(deepsense_id)
-        except:
-            raise ValueError('Unable to cast provided Deepsense id %s to an int' % deepsense_id)
+
         assert deepsense_id not in id_dict, 'Deepsense-to-Flukebook id map contains two entries for deepsense ID %s' % deepsense_id
 
         flukebook_id = row[1]
@@ -284,8 +285,12 @@ def aid_from_annot_uuid(ibs, annot_uuid):
     return aid
 
 
-def get_b64_image(ibs, aid, **kwargs):
-    image_path = deepsense_annot_chip_fpath(ibs, aid, **kwargs)
+@register_ibs_method
+def get_b64_image(ibs, aid, training_config=False, **kwargs):
+    if not training_config:
+        image_path = ibs.deepsense_annot_chip_fpath(aid, **kwargs)
+    else:
+        image_path = deepsense_annot_training_chip_fpath(ibs, aid)
     pil_image = Image.open(image_path)
     byte_buffer = BytesIO()
     pil_image.save(byte_buffer, format="JPEG")
@@ -295,15 +300,15 @@ def get_b64_image(ibs, aid, **kwargs):
 
 @register_ibs_method
 def ibeis_plugin_deepsense_identify_aid(ibs, aid, config={}, **kwargs):
-    url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
-    b64_image = get_b64_image(ibs, aid, **config)
+    #url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
+    url = '127.0.0.1:6066'  # for testing new ID container
+    b64_image = ibs.get_b64_image(aid, **config)
     data = {
         'image': b64_image,
         'configuration': {
             'top_n': 100,
             'threshold': 0.0,
-        }
-    }
+        }    }
     url = 'http://%s/api/classify' % (url)
     print('Sending identify to %s' % url)
     response = requests.post(url, json=data, timeout=120)
@@ -314,9 +319,9 @@ def ibeis_plugin_deepsense_identify_aid(ibs, aid, config={}, **kwargs):
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_align_aid(ibs, aid, config={}, **kwargs):
+def ibeis_plugin_deepsense_align_aid(ibs, aid, config={}, training_config=False, **kwargs):
     url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
-    b64_image = get_b64_image(ibs, aid, **config)
+    b64_image = get_b64_image(ibs, aid, training_config=training_config, **config)
     data = {
         'image': b64_image,
     }
@@ -328,9 +333,9 @@ def ibeis_plugin_deepsense_align_aid(ibs, aid, config={}, **kwargs):
 
 
 @register_ibs_method
-def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, config={}, **kwargs):
+def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, config={}, training_config=False, **kwargs):
     url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
-    b64_image = get_b64_image(ibs, aid, **config)
+    b64_image = get_b64_image(ibs, aid, training_config=training_config, **config)
     data = alignment_result.copy()
     data['image'] = b64_image
     url = 'http://%s/api/keypoints' % (url)
@@ -469,6 +474,18 @@ def deepsense_annot_chip_fpath(ibs, aid, dim_size=DIM_SIZE, **kwargs):
 
 
 @register_ibs_method
+def deepsense_annot_training_chip_fpath(ibs, aid, **kwargs):
+
+    config = {
+        'dim_size': (256, 256),
+        'resize_dim': 'wh',
+        'ext': '.jpg',
+    }
+    fpath = ibs.get_annot_chip_fpath(aid, ensure=True, config2_=config)
+    return fpath
+
+
+@register_ibs_method
 def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, output=False, config={}, **kwargs):
     r"""
     Run the illustration examples
@@ -500,7 +517,7 @@ def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, output=False, config={}
     alignment = ibs.ibeis_plugin_deepsense_align(annot_uuid, config=config)
     keypoints = ibs.ibeis_plugin_deepsense_keypoint(annot_uuid, config=config)
     aid = aid_from_annot_uuid(ibs, annot_uuid)
-    image_path = deepsense_annot_chip_fpath(ibs, aid, **config)
+    image_path = ibs.deepsense_annot_chip_fpath(aid, **config)
     # TODO write this func
     #image_path = ibs.get_deepsense_chip_fpath(aid)
     pil_img = Image.open(image_path)
@@ -540,7 +557,7 @@ def ibeis_plugin_deepsense_illustration(ibs, annot_uuid, output=False, config={}
 def ibeis_plugin_deepsense_passport(ibs, annot_uuid, output=False, config={}, **kwargs):
     keypoints = ibs.ibeis_plugin_deepsense_keypoint(annot_uuid, config=config)
     aid = aid_from_annot_uuid(ibs, annot_uuid)
-    image_path = deepsense_annot_chip_fpath(ibs, aid, **config)
+    image_path = ibs.deepsense_annot_chip_fpath(aid, **config)
     # TODO write this func
     #image_path = ibs.get_deepsense_chip_fpath(aid)
     pil_img = Image.open(image_path)
@@ -577,15 +594,15 @@ def ibeis_plugin_deepsense_passport(ibs, annot_uuid, output=False, config={}, **
     canvas = canvas.crop(crop_box)
 
     # resize the image to standard
-    square_size = 1000
+    square_size = 256  # TODO this was 1000
     canvas = canvas.resize((square_size, square_size), resample=Image.LANCZOS)
     # now draw ellipses on the blowhole and bonnet.
     # because of the rotation, centering, and now resizing, we know these will always be in the exact same pixel location
     draw = ImageDraw.Draw(canvas)
     bonnet_coords = bounding_box_at_centerpoint((square_size / 2, square_size / 4))
-    draw.ellipse( bonnet_coords, outline="green", width=2)
+    # draw.ellipse( bonnet_coords, outline="green", width=2)  # TODO this was not commented
     blowhole_coords = bounding_box_at_centerpoint((square_size / 2, square_size * 3 / 4))
-    draw.ellipse( blowhole_coords, outline="blue", width=2)
+    # draw.ellipse( blowhole_coords, outline="blue", width=2) # TODO this was not commented
 
     if output:
         local_path = dirname(abspath(__file__))
@@ -672,6 +689,27 @@ def ibeis_plugin_deepsense_keypoint_deepsense_ids_depc(depc, alignment_rowids, c
     aid_list = depc.get_ancestor_rowids('DeepsenseAlignment', alignment_rowids)
     for alignment, aid in zip(alignments, aid_list):
         response = ibs.ibeis_plugin_deepsense_keypoint_aid(aid, alignment, config=config)
+        yield (response, )
+
+
+class DeepsenseTrainingConfig(dt.Config):  # NOQA
+    _param_info_list = [
+        ut.ParamInfo('dim_size', (256, 256))
+    ]
+
+
+@register_preproc_annot(
+    tablename='DeepsenseTraining', parents=[ANNOTATION_TABLE],
+    colnames=['response'], coltypes=[dict],
+    configclass=DeepsenseTrainingConfig,
+    fname='deepsense',
+    chunksize=128)
+def ibeis_plugin_deepsense_training_keypoints(depc, aid_list, config):
+    # The doctest for ibeis_plugin_deepsense_identify_deepsense_ids also covers this func
+    ibs = depc.controller
+    for aid in aid_list:
+        alignment = ibs.ibeis_plugin_deepsense_align_aid(aid, training_config=True)
+        response  = ibs.ibeis_plugin_deepsense_keypoint_aid(aid, alignment, training_config=True)
         yield (response, )
 
 
@@ -951,19 +989,35 @@ def ibeis_plugin_deepsense(depc, qaid_list, daid_list, config):
 # Image,whaleID,bbox1_x,bbox1_y,bbox2_x,bbox2_y,height,width,callosity,bonnet_x,bonnet_y,blowhead_x,blowhead_y
 # 10000.jpg,1950,757,593,1009,839,1360,2048,2,898,656,804,754
 @register_ibs_method
-def retraining_metadata(ibs, aid_list):
-    fpath = ibs.deepsense_annot_chip_fpath_list(aid_list)
-    return fpath
+def deepsense_retraining_metadata(ibs, species='Eubalaena australis'):
+    aid_list = ibs.get_valid_aids(species=species)
+    return ibs.deepsense_retraining_metadata_list(aid_list)
+
+
+@register_ibs_method
+def deepsense_retraining_metadata_rotated(ibs, species='Eubalaena australis'):
+    print('getting aids')
+    aid_list = ibs.get_valid_aids(species=species)
+    print('generating metadata')
+    csv_str  = ibs.deepsense_retraining_metadata_list(aid_list)
+    print('converting metadata to dicts')
+    csv_dict = csv_string_to_dicts(csv_str)
+    print('rotating those dicts')
+    rotated_dicts = [rotate_row(row) for row in csv_dict]
+    print('back to a string')
+    rotated_str = array_of_dicts_to_csv(rotated_dicts)
+    return rotated_str
 
 
 @register_ibs_method
 def deepsense_retraining_metadata_list(ibs, aid_list):
     num_annots = len(aid_list)
-    fpaths = [ibs.deepsense_annot_chip_fpath(aid) for aid in aid_list]
+    fpaths = [ibs.deepsense_annot_training_chip_fpath(aid) for aid in aid_list]
+    fpaths = [ibs.deepsense_annot_training_chip_fpath(aid) for aid in aid_list]
     assert len(fpaths) == num_annots
     names  = ibs.get_annot_nids(aid_list)
     assert len(names)  == num_annots
-    keypoints = ibs.depc_annot.get('DeepsenseKeypoint', aid_list, 'response')
+    keypoints = ibs.depc_annot.get('DeepsenseTraining', aid_list, 'response')
     # contains keypoint['blowhead']['x'] and keypoint['bonnet']['y'] etc
     # check that keypoints are relative the chip_fpath or the image_fpath
     # keypoints = [keypoint['keypoints'] for keypoint in keypoints]
@@ -1039,32 +1093,215 @@ def deepsense_retraining_metadata_list(ibs, aid_list):
         bbox2_ys,
     ])
 
-    cleaned_ans = ibs.heuristically_clean_trainingset(full_ans)
+    # cleaned_ans = ibs.heuristically_clean_trainingset(full_ans)
+    # csv_str = ut.make_standard_csv(cleaned_ans, header_row)
 
-    csv_str = ut.make_standard_csv(cleaned_ans, header_row)
-
+    csv_str = ut.make_standard_csv(full_ans, header_row)
     return csv_str
 
 
 @register_ibs_method
-def heuristically_clean_trainingset(ibs, full_ans):
-    cleaned_ans = []
-    working_ans = np.transpose(full_ans)
-    print('heuristically_clean_trainingset called on %s rows' % len(working_ans))
-    for row in working_ans:
-        blow_x, blow_y = int(row[3]), int(row[4])
-        bonn_x, bonn_y = int(row[5]), int(row[6])
-        height, width  = int(row[7]), int(row[8])
-        print ('our 6 vals are %s, %s, %s, %s, %s, %s' % (blow_x, blow_y, bonn_x, bonn_y, height, width))
-        if (
-            point_within_aoi(blow_x, blow_y, width, height) and
-            point_within_aoi(bonn_x, bonn_y, width, height)
-        ):
-            cleaned_ans += [row]
-    print('heuristically_clean_trainingset now has  %s rows' % len(cleaned_ans))
-    diff = len(working_ans) - len(cleaned_ans)
-    print(' we removed %s rows, %s percent' % (diff, (100 * diff / len(working_ans)) ) )
-    return np.transpose(cleaned_ans)
+def deepsense_retraining_metadata_end_to_end(ibs, aid_list):
+    num_annots = len(aid_list)
+    fpaths = [ibs.deepsense_annot_chip_fpath(aid) for aid in aid_list]
+    assert len(fpaths) == num_annots
+    names  = ibs.get_annot_nids(aid_list)
+    assert len(names)  == num_annots
+    keypoints = ibs.depc_annot.get('DeepsenseKeypoint', aid_list, 'response')
+    blow_xs = [row['keypoints']['blowhead']['x'] for row in keypoints]
+    blow_ys = [row['keypoints']['blowhead']['y'] for row in keypoints]
+    bonn_xs = [row['keypoints']['bonnet']['x']   for row in keypoints]
+    bonn_ys = [row['keypoints']['bonnet']['y']   for row in keypoints]
+
+    # TODO: optimize this so it doesn't have to actually load all the images
+    gid_list = ibs.get_annot_gids(aid_list)
+    wh_list  = ibs.get_image_sizes(gid_list)
+    assert len(wh_list) == num_annots
+    widths  = [wh[0] for wh in wh_list]
+    heights = [wh[1] for wh in wh_list]
+
+    alignments = ibs.depc_annot.get('DeepsenseAlignment', aid_list, 'response')
+    alignments = [a['localization'] for a in alignments]
+    assert len(alignments) == num_annots
+    bbox1_xs = [ali['bbox1']['x'] for ali in alignments]
+    bbox1_ys = [ali['bbox1']['y'] for ali in alignments]
+    bbox2_xs = [ali['bbox2']['x'] for ali in alignments]
+    bbox2_ys = [ali['bbox2']['y'] for ali in alignments]
+
+    sizes   = [get_imagesize(f) for f in fpaths]
+    widths  = [size[0] for size in sizes]
+    heights = [size[1] for size in sizes]
+
+    callosities = [0] * num_annots
+
+    header_row = [
+        'Image',
+        'whaleID',
+        'callosity',
+        'blowhead_x',
+        'blowhead_y',
+        'bonnet_x',
+        'bonnet_y',
+        'height',
+        'width',
+        'bbox1_x',
+        'bbox1_y',
+        'bbox2_x',
+        'bbox2_y',
+    ]
+
+    full_ans = np.array([
+        fpaths,
+        names,
+        callosities,
+        blow_xs,
+        blow_ys,
+        bonn_xs,
+        bonn_ys,
+        heights,
+        widths,
+        bbox1_xs,
+        bbox1_ys,
+        bbox2_xs,
+        bbox2_ys,
+    ])
+
+    # cleaned_ans = ibs.heuristically_clean_trainingset(full_ans)
+    # csv_str = ut.make_standard_csv(cleaned_ans, header_row)
+
+    csv_str = ut.make_standard_csv(full_ans, header_row)
+    return csv_str
+
+
+def get_imagesize(fpath):
+    im = Image.open(fpath)
+    return im.size
+
+
+@register_ibs_method
+def deepsense_retraining_metadata_passports(ibs, aid_list, passport_paths=None, chip_size=256):
+    num_annots = len(aid_list)
+    if passport_paths is None:
+        passport_paths = ibs.depc_annot.get('DeepsensePassport', aid_list, 'image', config={}, read_extern=False, ensure=True)
+    fpaths = passport_paths
+    assert len(fpaths) == num_annots
+    names  = ibs.get_annot_nids(aid_list)
+    names  = ibs.get_name_texts(names)
+    names  = ibs.deepsense_name_texts_to_neaq_ids(names)
+    assert len(names)  == num_annots
+
+    # construct keypoints
+    # Here we're using the same fixed keypoints that are used to make the passport
+    bonn_xs = [int(chip_size / 2)] * num_annots
+    bonn_ys = [int(chip_size / 4)] * num_annots
+    blow_xs = [int(chip_size / 2)] * num_annots
+    blow_ys = [int(chip_size * 3 / 4)] * num_annots
+
+    bbox1_xs = [0] * num_annots
+    bbox1_ys = [0] * num_annots
+    bbox2_xs = [chip_size] * num_annots
+    bbox2_ys = [chip_size] * num_annots
+    widths   = [chip_size] * num_annots
+    heights  = [chip_size] * num_annots
+
+    callosities = [0] * num_annots
+
+    header_row = [
+        'Image',
+        'whaleID',
+        'callosity',
+        'blowhead_x',
+        'blowhead_y',
+        'bonnet_x',
+        'bonnet_y',
+        'height',
+        'width',
+        'bbox1_x',
+        'bbox1_y',
+        'bbox2_x',
+        'bbox2_y',
+    ]
+
+    # we could skip zipping below by using ut.make_standard_csv
+    full_ans = np.array([
+        fpaths,
+        names,
+        callosities,
+        blow_xs,
+        blow_ys,
+        bonn_xs,
+        bonn_ys,
+        heights,
+        widths,
+        bbox1_xs,
+        bbox1_ys,
+        bbox2_xs,
+        bbox2_ys,
+    ])
+
+    # cleaned_ans = ibs.heuristically_clean_trainingset(full_ans)
+    # csv_str = ut.make_standard_csv(cleaned_ans, header_row)
+
+    csv_str  = ut.make_standard_csv(full_ans, header_row)
+    print('converting metadata to dicts')
+    csv_dict = ibs.csv_string_to_dicts(csv_str)
+    # TODO: want to clean this here or solve nameless things somewhere else?
+    # csv_dict = ibs.deepsense_clean_metadata_dict(csv_dict)
+    print('rotating those dicts')
+    rotated_dicts = [rotate_row(row) for row in csv_dict]
+    print('back to a string')
+    rotated_str = ibs.array_of_dicts_to_csv(rotated_dicts)
+
+    return rotated_str
+
+
+@register_ibs_method
+def deepsense_name_texts_to_neaq_ids(ibs, name_texts):
+    neaq_to_name_text = ibs.ibeis_plugin_deepsense_ensure_id_map()
+    name_text_to_neaq = {neaq_to_name_text[val]: val for val in neaq_to_name_text}
+    ans = name_texts.copy()
+    for i in range(len(name_texts)):
+        name = name_texts[i]
+        if name in name_text_to_neaq:
+            ans[i] = name_text_to_neaq[name]
+    return ans
+
+
+@register_ibs_method
+def deepsense_clean_csv_metadata_dict(ibs, csv_dict):
+    # removes rows with an unknown name
+    ans = [row for row in csv_dict if row['whaleID'] != '____']
+    return ans
+
+
+@register_ibs_method
+def heuristically_clean_trainingset(ibs, metadata_dicts):
+
+    print('heuristically_clean_trainingset called on %s rows' % len(metadata_dicts))
+
+    clean_rows = [row for row in metadata_dicts if good_row_heuristic(row)]
+    print('heuristically_clean_trainingset now has  %s rows' % len(clean_rows))
+    diff = len(metadata_dicts) - len(clean_rows)
+    percent = 100 * diff / len(metadata_dicts)
+    print(' we removed %s rows, %s%%' % (diff, percent))
+    return clean_rows
+
+
+def filter_only_resights(metadata_dicts, min_resights=2):
+    ids = [row['whaleID'] for row in metadata_dicts]
+    counts = [ids.count(i) for i in ids]
+    filtered = [row for (row, count) in zip(metadata_dicts, counts) if count >= min_resights]
+    return filtered
+
+
+def good_row_heuristic(dict_row):
+    blowhead = (int(dict_row['blowhead_x']), int(dict_row['blowhead_y']))
+    bonnet   = (int(dict_row['bonnet_x']),   int(dict_row['bonnet_y']))
+    return (
+        point_in_middle_half_by_height(blowhead) and
+        point_in_middle_half_by_height(bonnet)   and
+        p1_is_left_of_p2(bonnet, blowhead)
+    )
 
 
 # because sometimes our keypoints don't fall in the central square
@@ -1078,6 +1315,16 @@ def point_within_aoi(x, y, width, height, delta=10):
         y > height - delta     and
         y < 2 * height + delta
     )
+
+
+def point_in_middle_half_by_height(p, w=256, h=256):
+    py = p[1]
+    return (py > h / 4 and py < 3 * h / 4)
+
+
+def p1_is_left_of_p2(p1, p2):
+    p1x, p2x = p1[0], p2[0]
+    return p1x < p2x
 
 
 # goal is to overlay the bbox, blowhole and bonnet from the deepsense metadata
@@ -1116,102 +1363,261 @@ def illustrate_metadata_helper(row, i, imgdir):
     return canvas
 
 
-def csv_string_to_dicts(csvstring):
+@register_ibs_method
+def csv_string_to_dicts(ibs, csvstring):
     csvstring = csvstring.replace('\r', '')
     rows = csvstring.split('\n')
     rows = [row.split(',') for row in rows]
     header = rows[0]
     rows   = rows[1:-1]  # -1 bc of a trailing empty string from initial split
-    # dicts = [{header[i]: row[i] for i in len(range(header))} for row in rows]
-    # dicts = []
-    # for row in rows:
-    #     dicts += [{header[i]: row[i] for i in range(len(header))}]
     dicts = [{header[i]: row[i] for i in range(len(header))} for row in rows]
     return dicts
 
 
+# assumes every dict has same keys as the first one
 @register_ibs_method
-def deepsense_retraining_metadata_list_full_img(ibs, aid_list):
-    num_annots = len(aid_list)
-    fpaths = [ibs.deepsense_annot_chip_fpath(aid) for aid in aid_list]
-    assert len(fpaths) == num_annots
-    names  = ibs.get_annot_nids(aid_list)
-    assert len(names)  == num_annots
-    keypoints = ibs.depc_annot.get('DeepsenseKeypoint', aid_list, 'response')
-    # contains keypoint['blowhead']['x'] and keypoint['bonnet']['y'] etc
-    # check that keypoints are relative the chip_fpath or the image_fpath
-    # keypoints = [keypoint['keypoints'] for keypoint in keypoints]
-    # assert len(keypoints) == num_annots
+def array_of_dicts_to_csv(ibs, dicts):
+    headers = list(dicts[0].keys())
+    values = [[d[header] for header in headers] for d in dicts]
+    # transpose to work with ut.make_standard_csv
+    values = np.array(values).T
+    csv_str = ut.make_standard_csv(values, headers)
+    return csv_str
 
-    # is this worth it to only list-traverse once? lol. seems likely over-optimization.
-    # is this worth it to only list-traverse once? lol. seems likely over-optimization.
-    # THIS MUST BE WHERE BAD THINGS HAPPEN
-    blow_xs = [row['keypoints']['blowhead']['x'] for row in keypoints]
-    blow_ys = [row['keypoints']['blowhead']['y'] for row in keypoints]
-    bonn_xs = [row['keypoints']['bonnet']['x']   for row in keypoints]
-    bonn_ys = [row['keypoints']['bonnet']['y']   for row in keypoints]
 
-    # blowx_blowy_bonx_bony = [
-    #     [keypoint['blowhead']['x'], keypoint['blowhead']['y'],
-    #      keypoint['bonnet']['x'],   keypoint['bonnet']['y']]
-    #     for keypoint in keypoints
-    # ]
-    # blow_xs, blow_ys, bonn_xs, bonn_ys = np.transpose(blowx_blowy_bonx_bony)
-    for feat_list in (blow_xs, blow_ys, bonn_xs, bonn_ys):
-        assert len(feat_list) == num_annots
+def rotate_row(csv_row):
 
-    # TODO: optimize this so it doesn't have to actually load all the images
-    gid_list = ibs.get_annot_gids(aid_list)
-    wh_list  = ibs.get_image_sizes(gid_list)
-    assert len(wh_list) == num_annots
-    widths  = [wh[0] for wh in wh_list]
-    heights = [wh[1] for wh in wh_list]
+    fpath = csv_row['Image']
+    np_img = load_image_np(fpath)
+    # np.rot90 is counterclockwise
+    np_img = np.rot90(np_img)
+    imgname = fpath.split('/')[-1]
+    new_path = '/home/wildme/code/ibeis-deepsense-module/retraining/rotated_passports/'
+    new_path = new_path + imgname
+    im = Image.fromarray(np_img)
+    im.save(new_path)
+    csv_row['Image'] = new_path
 
-    bboxes = ibs.get_annot_bboxes(aid_list)
-    assert len(bboxes) == num_annots
-    bbox1_xs = [bbox[0] for bbox in bboxes]
-    bbox1_ys = [bbox[1] for bbox in bboxes]
-    bbox2_xs = [bbox[2] for bbox in bboxes]
-    bbox2_ys = [bbox[3] for bbox in bboxes]
+    bonnet = (csv_row['bonnet_x'], csv_row['bonnet_y'])
+    rotated_bonn = rotate_90(bonnet)
+    csv_row['bonnet_x'] = rotated_bonn[0]
+    csv_row['bonnet_y'] = rotated_bonn[1]
 
-    callosities = [0] * num_annots
+    blow   = (csv_row['blowhead_x'], csv_row['blowhead_y'])
+    rotated_blow = rotate_90(blow)
+    csv_row['blowhead_x'] = rotated_blow[0]
+    csv_row['blowhead_y'] = rotated_blow[1]
 
-    header_row = [
-        'Image',
-        'whaleID',
-        'callosity',
-        'blowhead_x',
-        'blowhead_y',
-        'bonnet_x',
-        'bonnet_y',
-        'height',
-        'width',
-        'bbox1_x',
-        'bbox1_y',
-        'bbox2_x',
-        'bbox2_y',
-    ]
+    bbox1   = (csv_row['bbox1_x'], csv_row['bbox1_y'])
+    rotated_bbox1 = rotate_90(bbox1)
+    csv_row['bbox1_x'] = rotated_bbox1[0]
+    csv_row['bbox1_y'] = rotated_bbox1[1]
 
-    # we could skip zipping below by using ut.make_standard_csv
-    full_ans = np.array([
-        fpaths,
-        names,
-        callosities,
-        blow_xs,
-        blow_ys,
-        bonn_xs,
-        bonn_ys,
-        heights,
-        widths,
-        bbox1_xs,
-        bbox1_ys,
-        bbox2_xs,
-        bbox2_ys,
-    ])
+    bbox2   = (csv_row['bbox2_x'], csv_row['bbox2_y'])
+    rotated_bbox2 = rotate_90(bbox2)
+    csv_row['bbox2_x'] = rotated_bbox2[0]
+    csv_row['bbox2_y'] = rotated_bbox2[1]
 
-    csv_str = ut.make_standard_csv(full_ans, header_row)
+    csv_row['width'], csv_row['height']  = csv_row['height'], csv_row['width']
+
+    return csv_row
+
+
+@register_ibs_method
+def subsample_matching_distribution_from_file(ibs, src_fpath, target_fpath):
+    with open(src_fpath, 'r') as file:
+        src_csv = file.read()
+    with open(target_fpath, 'r') as file:
+        target_csv = file.read()
+
+    source_metadata = ibs.csv_string_to_dicts(src_csv)
+    target_metadata = ibs.csv_string_to_dicts(target_csv)
+
+    return subsample_matching_distribution(source_metadata, target_metadata)
+
+
+# resample source_metadata (a csv dict) to match the sightings/individual distribution of target_metadata
+def subsample_matching_distribution(source_metadata, target_metadata):
+    from random import sample
+
+    src_names = [row['whaleID'] for row in source_metadata]
+    tgt_names = [row['whaleID'] for row in target_metadata]
+    src_name_lookup = get_lookup_dict(src_names)
+    tgt_name_lookup = get_lookup_dict(tgt_names)
+
+    src_hist = [{'name': name, 'count': len(src_name_lookup[name])} for name in set(src_names)]
+    tgt_hist = [{'name': name, 'count': len(tgt_name_lookup[name])} for name in set(tgt_names)]
+
+    src_hist = sorted(src_hist, key=lambda i: i['count'])
+    tgt_hist = sorted(tgt_hist, key=lambda i: i['count'])
+    initial_target_sighting_dist = [row['count'] for row in tgt_hist]
+
+    # remove singletons
+    src_hist = remove_singletons(src_hist)
+    tgt_hist = remove_singletons(tgt_hist)
+
+    # we now need to subsample tgt_hist so that it has the same number of rows (names) as src_hist
+    if (len(tgt_hist) > len(src_hist)):
+        tgt_hist = sample(tgt_hist, len(src_hist))
+        tgt_hist = sorted(tgt_hist, key=lambda i: i['count'])
+
+    target_sighting_dist = [row['count'] for row in tgt_hist]
+
+    # sort the histograms
+
+    subsampled_src = []
+    already_sampled_rows = []
+
+    for i, row in zip(range(len(tgt_hist)), tgt_hist):
+        tgt_count = row['count']
+        src_row = get_next_row_for_subsampling(tgt_count, src_hist, already_sampled_rows)
+        if src_row > len(src_hist):
+            break
+        name = src_hist[src_row]['name']
+        name_rows = src_name_lookup[name]
+        assert len(name_rows) >= tgt_count, 'We messed up subsampling: not enough sightings for this name'
+        if len(name_rows) > tgt_count:
+            name_rows = sample(name_rows, tgt_count)
+        for src_row in name_rows:
+            subsampled_src.append(source_metadata[src_row])
+
+    # now we validate the distribution of sightings per name
+    final_names = [row['whaleID'] for row in subsampled_src]
+    final_name_lookup = get_lookup_dict(final_names)
+    final_hist  = [{'name': n, 'count': len(final_name_lookup[n])} for n in set(final_name_lookup)]
+    final_sighting_dist = [row['count'] for row in final_hist]
+
+    initial_target_mean = np.mean(initial_target_sighting_dist)
+    initial_target_std  = np.std(initial_target_sighting_dist)
+    print('Initial Target sighting dist: mean=%2f, std=%2f' % (initial_target_mean, initial_target_std))
+
+    target_mean = np.mean(target_sighting_dist)
+    target_std  = np.std(target_sighting_dist)
+    print('Target sighting distribution: mean=%2f, std=%2f' % (target_mean, target_std))
+
+    final_mean = np.mean(final_sighting_dist)
+    final_std  = np.std(final_sighting_dist)
+    print('Final sighting distribution:  mean=%2f, std=%2f' % (final_mean, final_std))
+
+    csv_str = array_of_dicts_to_csv(None, subsampled_src)
 
     return csv_str
+
+
+# generates the whale_ids.csv file that deepsense uses internally to map whale IDs
+@register_ibs_method
+def deepsense_internal_mapping_csv(ibs, csv_dict):
+    names = [row['whaleID'] for row in csv_dict]
+    sorted_names = list(set(names))
+    sorted_names.sort()
+    name_dict = [{'indexID': i, 'whaleID': sorted_names[i]} for i in range(len(sorted_names))]
+    name_str  = ibs.array_of_dicts_to_csv(name_dict)
+    return name_str
+
+
+def remove_singletons(sorted_name_histogram):
+    cutoff = 0
+    while sorted_name_histogram[cutoff]['count'] < 2:
+        cutoff += 1
+    return sorted_name_histogram[cutoff:]
+
+
+def get_next_row_for_subsampling(tgt_count, sorted_histogram, already_sampled_rows):
+    if len(already_sampled_rows) is 0:
+        next_row = 0
+    else:
+        next_row = already_sampled_rows[-1] + 1
+    while next_row < len(sorted_histogram) and sorted_histogram[next_row]['count'] < tgt_count:
+        next_row += 1
+    # now next_row is the first row in sorted_histogram with count at least tgt_count
+    already_sampled_rows.append(next_row)
+    return next_row
+
+
+# given a list, returns a dict (multimap) where the keys are the listvalues and the values are the indices
+def get_lookup_dict(val_list):
+    lookup_dict = {}
+    for value, i in zip(val_list, range(len(val_list))):
+        add_to_multimap(lookup_dict, value, i)
+    return lookup_dict
+
+
+def add_to_multimap(multimap, key, value):
+    if key in multimap:
+        multimap[key] += [value]
+    else:
+        multimap[key] = [value]
+    return multimap
+
+
+def rotate_90(xy, img_radius=128):
+    # move center of image to origin
+    translated = (int(xy[0]) - img_radius, int(xy[1]) - img_radius)
+    # rotate 90 degrees counterclockwise around center
+    rotated_translated = (-translated[1], translated[0])
+    # translate back to original position
+    rotated = (rotated_translated[0] + img_radius, rotated_translated[1] + img_radius)
+    return rotated
+
+
+def load_image_np( infilename ) :
+    img = Image.open( infilename )
+    data = np.array( img )
+    return data
+
+
+RETRAINING_DIR = '/home/wildme/code/ibeis-deepsense-module/retraining/code/whales/'
+NUM_CLASSES_TAG = '\'num_classes\':'
+
+
+@register_ibs_method
+def update_deepsense_training_configs(ibs, metadata_fpath, retraining_dir=RETRAINING_DIR):
+
+    assert exists(metadata_fpath), 'No metadata file at %s' % metadata_fpath
+
+    # exp_name name is the name of the file (in between last slash and .csv)
+    exp_name = metadata_fpath.split('/')[-1].split('.csv')[0]
+
+    # now find neptune.yaml and pipeline_config.py
+    neptune_yaml_fpath = retraining_dir + 'neptune.yaml'
+    assert exists(neptune_yaml_fpath), 'Could not find neptune.yaml at %s' % neptune_yaml_fpath
+    pipeline_config_fpath = retraining_dir + 'pipeline_config.py'
+    assert exists(pipeline_config_fpath), 'Could not find pipeline_config.py at %s' % pipeline_config_fpath
+
+    # update pipeline_config.py so that it has the correct num_classes
+    with open(metadata_fpath, 'r') as f:
+        csv_str = f.read()
+    csv_dict = ibs.csv_string_to_dicts(csv_str)
+    names = [row['whaleID'] for row in csv_dict]
+    num_classes = len(set(names))
+    # we need to find the _first_ row that says 'num_classes': X and replace X with correct num_classes
+    with open(pipeline_config_fpath, 'r') as f:
+        pipeline_config = f.read()
+    pipeline_config_rows = pipeline_config.split('\n')
+    num_classes_row_i   = first_row_with_substr(pipeline_config, NUM_CLASSES_TAG)
+    num_classes_row_str = pipeline_config_rows[num_classes_row_i]
+    new_num_classes_row_str = update_num_classes_row(num_classes_row_str, num_classes)
+    pipeline_config_rows[num_classes_row_i] = new_num_classes_row_str
+    new_pipeline_config = '\n'.join(pipeline_config_rows)
+
+    # now save new_pipeline_config
+
+    # also save old pipeline_config in a cruft directory?
+
+    # then do the same for neptune.yaml
+
+
+def first_row_with_substr(string, substring):
+    rows = string.split('\n')
+    for i in range(len(rows)):
+        if substring in rows[i]:
+            return i
+    return None
+
+
+def update_num_classes_row(rowstr, new_num_classes):
+    before = rowstr.split('\'num_classes\':')[0]
+    return before + NUM_CLASSES_TAG + ' ' + str(new_num_classes) + ','
 
 
 if __name__ == '__main__':
