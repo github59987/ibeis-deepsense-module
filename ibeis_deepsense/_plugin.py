@@ -31,12 +31,19 @@ docker pull wildme.azurecr.io/ibeis/deepsense:latest
 
 
 DIM_SIZE = 2000
-BACKEND_URL = None
 
-INDIVIDUAL_MAP_FPATH = 'https://wildbookiarepository.azureedge.net/random/deepsense.flukebook.v0.csv'
-AUSTRALIS_MAP_FPATH  = '/home/wildme/code/ibeis-deepsense-module/retraining/deepsense.australis.v1.csv'
-ID_MAP = None
-AUSTRALIS_ID_MAP = None
+CONTAINER_ASSET_MAP = {
+    'flukebook_deepsense': {
+        'backend_url': None,
+        'individual_map_fpath': 'https://wildbookiarepository.azureedge.net/random/deepsense.flukebook.v0.csv',
+        'id_map': None,
+    },
+    'deepsense_SRW_v1': {
+        'backend_url': '127.0.0.1:6066',
+        'individual_map_fpath': '/home/wildme/code/ibeis-deepsense-module/retraining/deepsense.australis.v1.csv',
+        'id_map': None,
+    }
+}
 
 
 def _ibeis_plugin_deepsense_check_container(url):
@@ -83,6 +90,21 @@ docker_control.docker_register_config(None, 'flukebook_deepsense2', 'wildme.azur
 docker_control.docker_register_config(None, 'flukebook_deepsense5', 'wildme.azurecr.io/ibeis/deepsense:app5', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
 
 
+# This might need to be updated as part of extending the plugin in the future
+def _deepsense_container_selector(ibs, aid):
+    species = ibs.get_annot_species(aid)
+    if   species == 'eubalaena_australis':
+        container_name = 'deepsense_SRW_v1'
+    elif species == 'eubalaena_glacialis':
+        container_name = 'flukebook_deepsense'
+    return container_name
+
+
+def _deepsense_url_selector(ibs, aid):
+    container_name = _deepsense_container_selector(ibs, aid)
+    return ibs.ibeis_plugin_deepsense_ensure_backend(container_name)
+
+
 @register_ibs_method
 def _ibeis_plugin_deepsense_init_testdb(ibs):
     local_path = dirname(abspath(__file__))
@@ -124,9 +146,10 @@ def ibeis_plugin_deepsense_id_to_flukebook(ibs, deepsense_id):
 
 @register_ibs_method
 def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='flukebook_deepsense', **kwargs):
-    global BACKEND_URL
+    global CONTAINER_ASSET_MAP
+    assert container_name in CONTAINER_ASSET_MAP, 'CONTAINER_ASSET_MAP has no entry for container %s' % container_name
     # make sure that the container is online using docker_control functions
-    if BACKEND_URL is None:
+    if CONTAINER_ASSET_MAP[container_name]['backend_url'] is None:
         # Register depc blacklist
         prop_list = [None, 'theta', 'verts', 'species', 'name', 'yaws']
         for prop in prop_list:
@@ -138,23 +161,24 @@ def ibeis_plugin_deepsense_ensure_backend(ibs, container_name='flukebook_deepsen
         if len(BACKEND_URLS) == 0:
             raise RuntimeError('Could not ensure container')
         elif len(BACKEND_URLS) == 1:
-            BACKEND_URL = BACKEND_URLS[0]
+            CONTAINER_ASSET_MAP[container_name]['backend_url'] = BACKEND_URLS[0]
         else:
-            BACKEND_URL = BACKEND_URLS[0]
-            args = (BACKEND_URLS, BACKEND_URL, )
+            CONTAINER_ASSET_MAP[container_name]['backend_url'] = BACKEND_URLS[0]
+            args = (BACKEND_URLS, container_name, )
             print('[WARNING] Multiple BACKEND_URLS:\n\tFound: %r\n\tUsing: %r' % args)
-    return BACKEND_URL
+    return CONTAINER_ASSET_MAP[container_name]['backend_url']
 
 
 @register_ibs_method
 def ibeis_plugin_deepsense_ensure_id_map(ibs, container_name='flukebook_deepsense'):
-    global ID_MAP
+    global CONTAINER_ASSET_MAP
     # make sure that the container is online using docker_control functions
-    if ID_MAP is None:
-        fpath = ut.grab_file_url(INDIVIDUAL_MAP_FPATH, appname='ibeis_deepsense', check_hash=True)
+    if CONTAINER_ASSET_MAP[container_name]['id_map'] is None:
+        fpath = CONTAINER_ASSET_MAP[container_name]['individual_map_fpath']
+        fpath = ut.grab_file_url(fpath, appname='ibeis_deepsense', check_hash=True)
         csv_obj = ut.CSV.from_fpath(fpath, binary=False)
-        ID_MAP = dict_from_csv(csv_obj)
-    return ID_MAP
+        CONTAINER_ASSET_MAP[container_name]['id_map'] = dict_from_csv(csv_obj)
+    return CONTAINER_ASSET_MAP[container_name]['id_map']
 
 
 # I changed this to not be dependent on ints; warning untested
@@ -300,8 +324,7 @@ def get_b64_image(ibs, aid, training_config=False, **kwargs):
 
 @register_ibs_method
 def ibeis_plugin_deepsense_identify_aid(ibs, aid, config={}, **kwargs):
-    #url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
-    url = '127.0.0.1:6066'  # for testing new ID container
+    url = _deepsense_url_selector(ibs, aid)
     b64_image = ibs.get_b64_image(aid, **config)
     data = {
         'image': b64_image,
@@ -320,7 +343,7 @@ def ibeis_plugin_deepsense_identify_aid(ibs, aid, config={}, **kwargs):
 
 @register_ibs_method
 def ibeis_plugin_deepsense_align_aid(ibs, aid, config={}, training_config=False, **kwargs):
-    url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
+    url = _deepsense_url_selector(ibs, aid)
     b64_image = get_b64_image(ibs, aid, training_config=training_config, **config)
     data = {
         'image': b64_image,
@@ -334,7 +357,7 @@ def ibeis_plugin_deepsense_align_aid(ibs, aid, config={}, training_config=False,
 
 @register_ibs_method
 def ibeis_plugin_deepsense_keypoint_aid(ibs, aid, alignment_result, config={}, training_config=False, **kwargs):
-    url = ibs.ibeis_plugin_deepsense_ensure_backend(**kwargs)
+    url = _deepsense_url_selector(ibs, aid)
     b64_image = get_b64_image(ibs, aid, training_config=training_config, **config)
     data = alignment_result.copy()
     data['image'] = b64_image
@@ -598,10 +621,10 @@ def ibeis_plugin_deepsense_passport(ibs, annot_uuid, output=False, config={}, **
     canvas = canvas.resize((square_size, square_size), resample=Image.LANCZOS)
     # now draw ellipses on the blowhole and bonnet.
     # because of the rotation, centering, and now resizing, we know these will always be in the exact same pixel location
-    draw = ImageDraw.Draw(canvas)
-    bonnet_coords = bounding_box_at_centerpoint((square_size / 2, square_size / 4))
-    # draw.ellipse( bonnet_coords, outline="green", width=2)  # TODO this was not commented
-    blowhole_coords = bounding_box_at_centerpoint((square_size / 2, square_size * 3 / 4))
+    # draw = ImageDraw.Draw(canvas)
+    # bonnet_coords = bounding_box_at_centerpoint((square_size / 2, square_size / 4))
+    # # draw.ellipse( bonnet_coords, outline="green", width=2)  # TODO this was not commented
+    # blowhole_coords = bounding_box_at_centerpoint((square_size / 2, square_size * 3 / 4))
     # draw.ellipse( blowhole_coords, outline="blue", width=2) # TODO this was not commented
 
     if output:
@@ -1570,13 +1593,14 @@ RETRAINING_DIR = '/home/wildme/code/ibeis-deepsense-module/retraining/code/whale
 NUM_CLASSES_TAG = '\'num_classes\':'
 
 
+# TODO: complete this method
 @register_ibs_method
 def update_deepsense_training_configs(ibs, metadata_fpath, retraining_dir=RETRAINING_DIR):
 
     assert exists(metadata_fpath), 'No metadata file at %s' % metadata_fpath
 
     # exp_name name is the name of the file (in between last slash and .csv)
-    exp_name = metadata_fpath.split('/')[-1].split('.csv')[0]
+    # exp_name = metadata_fpath.split('/')[-1].split('.csv')[0]
 
     # now find neptune.yaml and pipeline_config.py
     neptune_yaml_fpath = retraining_dir + 'neptune.yaml'
@@ -1599,6 +1623,8 @@ def update_deepsense_training_configs(ibs, metadata_fpath, retraining_dir=RETRAI
     new_num_classes_row_str = update_num_classes_row(num_classes_row_str, num_classes)
     pipeline_config_rows[num_classes_row_i] = new_num_classes_row_str
     new_pipeline_config = '\n'.join(pipeline_config_rows)
+
+    return new_pipeline_config
 
     # now save new_pipeline_config
 
