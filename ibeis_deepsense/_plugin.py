@@ -39,8 +39,8 @@ CONTAINER_ASSET_MAP = {
         'id_map': None,
     },
     'deepsense_SRW_v1': {
-        'backend_url': '127.0.0.1:6066',
-        'individual_map_fpath': '/home/wildme/code/ibeis-deepsense-module/retraining/deepsense.australis.v1.csv',
+        'backend_url': None,
+        'individual_map_fpath': 'https://wildbookiarepository.azureedge.net/random/deepsense.australis.v1.csv',
         'id_map': None,
     }
 }
@@ -88,6 +88,7 @@ docker_control.docker_register_config(None, 'flukebook_deepsense', 'wildme.azure
 # next two lines for comparing containers side-by-side
 docker_control.docker_register_config(None, 'flukebook_deepsense2', 'wildme.azurecr.io/ibeis/deepsense:app2', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
 docker_control.docker_register_config(None, 'flukebook_deepsense5', 'wildme.azurecr.io/ibeis/deepsense:app5', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
+docker_control.docker_register_config(None, 'deepsense_SRW_v1', 'wildme.azurecr.io/ibeis/deepsense-srw:latest', run_args={'_internal_port': 5000, '_external_suggested_port': 5000}, container_check_func=_ibeis_plugin_deepsense_check_container)
 
 
 # This might need to be updated as part of extending the plugin in the future
@@ -134,8 +135,8 @@ def _ibeis_plugin_deepsense_rank(ibs, response_json, desired_name):
 # This method converts from the ibeis/Flukebook individual UUIDs to the Deepsense/
 # NEAQ IDs used by the deepsense container.
 @register_ibs_method
-def ibeis_plugin_deepsense_id_to_flukebook(ibs, deepsense_id):
-    id_dict = ibs.ibeis_plugin_deepsense_ensure_id_map()
+def ibeis_plugin_deepsense_id_to_flukebook(ibs, deepsense_id, container_name):
+    id_dict = ibs.ibeis_plugin_deepsense_ensure_id_map(container_name)
     if deepsense_id not in id_dict:
         # print warning bc we're missing a deepsense_id from our deepsense-flukebook map
         # print('[WARNING]: deepsense id %s is missing from the deepsense-flukebook ID map .csv' % deepsense_id)
@@ -337,7 +338,8 @@ def ibeis_plugin_deepsense_identify_aid(ibs, aid, config={}, **kwargs):
     response = requests.post(url, json=data, timeout=120)
     assert response.status_code == 200
     response = response.json()
-    response = update_response_with_flukebook_ids(ibs, response)
+    container_name = _deepsense_container_selector(ibs, aid)
+    response = update_response_with_flukebook_ids(ibs, response, container_name)
     return response
 
 
@@ -645,10 +647,11 @@ def bounding_box_at_centerpoint(point, radius=15):
     return (point_less, point_more)
 
 
-def update_response_with_flukebook_ids(ibs, response):
+def update_response_with_flukebook_ids(ibs, response, container_name):
     for score_dict in response['identification']:
         deepsense_id = score_dict['whale_id']
-        flukebook_id = ibs.ibeis_plugin_deepsense_id_to_flukebook(deepsense_id)
+        # below method needs to be updated to be species-sensitive
+        flukebook_id = ibs.ibeis_plugin_deepsense_id_to_flukebook(deepsense_id, container_name)
         score_dict['flukebook_id'] = flukebook_id
     return response
 
@@ -1279,7 +1282,7 @@ def deepsense_retraining_metadata_passports(ibs, aid_list, passport_paths=None, 
 
 
 @register_ibs_method
-def deepsense_name_texts_to_neaq_ids(ibs, name_texts):
+def deepsense_name_texts_to_neaq_ids(ibs, name_texts, container_name):
     neaq_to_name_text = ibs.ibeis_plugin_deepsense_ensure_id_map()
     name_text_to_neaq = {neaq_to_name_text[val]: val for val in neaq_to_name_text}
     ans = name_texts.copy()
