@@ -63,7 +63,7 @@ def _ibeis_plugin_deepsense_check_container(url):
 
         try:
             response = requests.options(url_, timeout=1)
-        except:
+        except Exception:
             response = None
 
         if response is not None and response.status_code:
@@ -198,7 +198,7 @@ def dict_from_csv(csv_obj):
         flukebook_id = row[1]
         try:
             uuid.UUID(flukebook_id)
-        except:
+        except Exception:
             raise ValueError('Unable to cast provided Flukebook id %s to a UUID' % flukebook_id)
         id_dict[deepsense_id] = flukebook_id
     return id_dict
