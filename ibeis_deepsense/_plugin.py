@@ -94,10 +94,9 @@ docker_control.docker_register_config(None, 'deepsense_SRW_v1', 'wildme.azurecr.
 # This might need to be updated as part of extending the plugin in the future
 def _deepsense_container_selector(ibs, aid):
     species = ibs.get_annot_species(aid)
-    if   species == 'eubalaena_australis':
+    container_name = 'flukebook_deepsense'
+    if species == 'eubalaena_australis':
         container_name = 'deepsense_SRW_v1'
-    elif species == 'eubalaena_glacialis':
-        container_name = 'flukebook_deepsense'
     return container_name
 
 
